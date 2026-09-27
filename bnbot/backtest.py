@@ -58,6 +58,7 @@ class Backtester:
             float(config["fees"].get("taker_bps", 5.0)) + float(config["fees"].get("slippage_bps", 2.0))
         ) / 10_000.0
         self.band = float(config["strategy"].get("rebalance_band", 0.05))
+        self.rb_mode = str(config["strategy"].get("rebalance_mode", "full"))
         self.capital = float(config["capital"])
 
     def run(self, start_ms, end_ms, strategy, title=""):
@@ -141,13 +142,17 @@ class Backtester:
                     continue
                 if tw != 0.0 and abs(tw - cw) <= band:
                     continue  # inside rebalance band
-                delta = (tw - cw) * equity
+                eff = tw
+                if tw != 0.0 and self.rb_mode == "edge":
+                    # trade only back to the nearest band edge, not to target
+                    eff = tw + (band if cw > tw else -band)
+                delta = (eff - cw) * equity
                 fee = abs(delta) * fee_rate
                 equity -= fee
                 fees += fee
                 traded += abs(delta)
                 ntrades += 1
-                pos[s] = tw * equity
+                pos[s] = eff * equity
 
             gross_sum += sum(abs(v) for v in pos.values()) / equity
             steps += 1

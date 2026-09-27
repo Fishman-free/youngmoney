@@ -20,7 +20,9 @@
     "carry_weight": 0.10,
     "vol_lookback_days": 30,
     "max_vol_scale": 2.0,
-    "rebalance_band": 0.05
+    "funding_smooth_events": 3,
+    "rebalance_band": 0.12,
+    "rebalance_mode": "edge"
   },
   "risk": {
     "max_gross_leverage": 2.0,

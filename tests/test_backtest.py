@@ -84,6 +84,20 @@ class TestBacktestInvariants(unittest.TestCase):
         expected = eq1 - pos * 0.01 + pos * 0.005  # +1% paid, then -0.5% received
         self.assertAlmostEqual(r.curve[-1][1], expected, places=6)
 
+    def test_edge_mode_trades_to_band_edge_not_target(self):
+        md = make_market(SYM, closes4h=[100.0] * 60, closes1d=[100.0] * 15)
+        self.cfg["strategy"]["rebalance_mode"] = "edge"
+        r = self._run(md, {SYM: 0.3})
+        # band 0.05: entry lands at 0.25 (= target - band), flat prices never re-trigger
+        self.assertEqual(r.ntrades, 1)
+        self.assertAlmostEqual(r.traded_notional, 2500.0, places=6)
+        self.assertAlmostEqual(r.fees, 2500.0 * FEE_RATE, places=6)
+
+    def test_full_mode_unchanged_by_default(self):
+        md = make_market(SYM, closes4h=[100.0] * 60, closes1d=[100.0] * 15)
+        r = self._run(md, {SYM: 0.3})
+        self.assertAlmostEqual(r.traded_notional, 3000.0, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

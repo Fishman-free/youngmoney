@@ -22,7 +22,7 @@ annualized vol, capped). Carry keeps its own fixed magnitude (carry_weight).
 import bisect
 from dataclasses import dataclass, fields
 
-from .data import INTERVAL_MS, MS_PER_DAY
+from .data import FUNDING_GRACE_MS, INTERVAL_MS, MS_PER_DAY
 from .quant import clamp, ema, sign, stdev
 
 
@@ -40,11 +40,13 @@ class StrategyParams:
     target_vol: float
     vol_lookback_days: int
     max_vol_scale: float
+    funding_smooth_events: int = 3
 
     @classmethod
     def from_config(cls, config, overrides=None):
         merged = dict(config["strategy"])
         merged["target_vol"] = config.get("target_vol", 0.20)
+        merged.setdefault("funding_smooth_events", 3)
         if overrides:
             merged.update(overrides)
         names = {f.name for f in fields(cls)}
@@ -143,10 +145,15 @@ class SignalEngine:
         return self.market.funding_event_at(sym, ts)
 
     def ann_funding_at(self, sym, ts):
-        ev = self.funding_event_at(sym, ts)
-        if ev is None:
+        f = self.market.funding.get(sym)
+        if not f or not f["times"]:
             return 0.0
-        return ev[1] * 3.0 * 365.0  # 8h rate -> annualized
+        i = bisect.bisect_right(f["times"], ts + FUNDING_GRACE_MS) - 1
+        if i < 0:
+            return 0.0
+        n = max(1, int(self.params.funding_smooth_events))
+        rates = f["rates"][max(0, i - n + 1) : i + 1]
+        return (sum(rates) / len(rates)) * 3.0 * 365.0  # 8h rate -> annualized
 
 
 class Context:

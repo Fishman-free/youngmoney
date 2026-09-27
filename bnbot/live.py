@@ -160,16 +160,23 @@ def paper_round(cfg, client, mode="paper"):
     state["peak_equity"] = max(state.get("peak_equity", equity), equity)
 
     orders = []
+    rb_mode = str(cfg["strategy"].get("rebalance_mode", "full"))
     for s in symbols:
         tw = target.get(s, 0.0)
         cur_qty = positions.get(s, {}).get("qty", 0.0)
         px = marks[s]
         filters = symbol_filters(cfg["data"]["data_dir"], s)
-        target_qty = tw * equity / px if px > 0 else 0.0
+        cw = cur_w[s]
+        flatten = tw == 0.0 and abs(cur_qty) > 0
+        if not flatten and abs(tw - cw) <= band:
+            continue  # inside rebalance band (parity with backtest)
+        eff = tw
+        if tw != 0.0 and rb_mode == "edge":
+            eff = tw + (band if cw > tw else -band)  # nearest band edge
+        target_qty = eff * equity / px if px > 0 else 0.0
         delta_qty = target_qty - cur_qty
         notional = abs(delta_qty) * px
-        flatten = tw == 0.0 and abs(cur_qty) > 0
-        if not flatten and notional < max(filters["min_notional"], band * equity):
+        if not flatten and notional < filters["min_notional"]:
             continue
         qty = round_step(abs(delta_qty), filters["step_size"])
         if qty <= 0:

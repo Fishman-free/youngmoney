@@ -93,6 +93,21 @@ class TestCarryTilt(unittest.TestCase):
     def test_no_funding_no_tilt(self):
         self.assertAlmostEqual(self._weight([]), 0.0)
 
+    def test_funding_trailing_mean_smooths_spike(self):
+        md = make_market(
+            SYM, closes4h=[100.0] * 200, closes1d=[100.0] * 60,
+            funding=[(40 * 4 * MS_PER_HOUR, 0.0),
+                     (41 * 4 * MS_PER_HOUR, 0.0),
+                     (42 * 4 * MS_PER_HOUR, 0.03)],
+        )
+        ts = T0 + 150 * 4 * MS_PER_HOUR
+        strat = CompositeStrategy(make_config("unused"), md)
+        self.assertAlmostEqual(strat.engine.ann_funding_at(SYM, ts), 0.01 * 3 * 365.0)
+        strat1 = CompositeStrategy(
+            make_config("unused"), md, overrides={"funding_smooth_events": 1}
+        )
+        self.assertAlmostEqual(strat1.engine.ann_funding_at(SYM, ts), 0.03 * 3 * 365.0)
+
 
 class TestInterface(unittest.TestCase):
     def test_target_positions_covers_all_symbols(self):
