@@ -1,0 +1,42 @@
+{
+  "capital": 10000.0,
+  "base_currency": "USDT",
+  "target_vol": 0.20,
+  "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+  "data": {
+    "start": "2024-01-01",
+    "intervals": ["4h", "1d"],
+    "data_dir": "data"
+  },
+  "strategy": {
+    "weight_trend": 0.5,
+    "weight_mom": 0.3,
+    "donchian_window": 48,
+    "ema_fast": 20,
+    "ema_slow": 50,
+    "mom_lookback_days": 30,
+    "mom_deadband": 0.0,
+    "funding_ann_threshold": 0.05,
+    "carry_weight": 0.10,
+    "vol_lookback_days": 30,
+    "max_vol_scale": 2.0,
+    "rebalance_band": 0.05
+  },
+  "risk": {
+    "max_gross_leverage": 2.0,
+    "max_symbol_weight": 0.35,
+    "daily_loss_stop": 0.03,
+    "drawdown_throttle": 0.15,
+    "drawdown_halt": 0.25,
+    "kill_switch_file": "KILL_SWITCH"
+  },
+  "fees": {
+    "taker_bps": 5.0,
+    "slippage_bps": 2.0
+  },
+  "live": {
+    "paper_interval_hours": 4,
+    "state_file": "state/portfolio.json",
+    "log_dir": "logs"
+  }
+}
