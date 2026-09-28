@@ -41,6 +41,11 @@ class StrategyParams:
     vol_lookback_days: int
     max_vol_scale: float
     funding_smooth_events: int = 3
+    xs_weight: float = 0.0
+    xs_top_n: int = 2
+    xs_mom_lookback_days: int = 30
+    xs_mom_share: float = 0.6
+    xs_high52_share: float = 0.4
 
     @classmethod
     def from_config(cls, config, overrides=None):
@@ -50,7 +55,7 @@ class StrategyParams:
         if overrides:
             merged.update(overrides)
         names = {f.name for f in fields(cls)}
-        return cls(**{k: merged[k] for k in names})
+        return cls(**{k: merged[k] for k in names if k in merged})
 
 
 class SignalEngine:
@@ -67,6 +72,8 @@ class SignalEngine:
         self.params = params
         self._trend = {}  # symbol -> (open_times, step_ms, signals)
         self._mom = {}  # symbol -> (day_times, signals)
+        self._mom_raw = {}  # symbol -> (day_times, trailing returns)
+        self._h52 = {}  # symbol -> (day_times, close/365d-high ratios)
         self._vol = {}  # symbol -> (day_times, ann_vols)
         self._precompute()
 
@@ -107,8 +114,11 @@ class SignalEngine:
         p = self.params
         ds = self.market.klines[(sym, "1d")]
         closes = ds.close
+        highs = ds.high
         n = len(closes)
         mom = [0] * n
+        raw = [None] * n
+        h52 = [None] * n
         vol = [0.0] * n
         rets = [0.0] * n
         for d in range(1, n):
@@ -117,11 +127,18 @@ class SignalEngine:
             if d >= p.mom_lookback_days:
                 ret = closes[d] / closes[d - p.mom_lookback_days] - 1.0
                 mom[d] = sign(ret) if abs(ret) > p.mom_deadband else 0
+            if d >= p.xs_mom_lookback_days:
+                raw[d] = closes[d] / closes[d - p.xs_mom_lookback_days] - 1.0
+            win_high = max(highs[max(0, d - 364) : d + 1]) if highs else 0.0
+            if win_high > 0:
+                h52[d] = closes[d] / win_high
             if d >= p.vol_lookback_days:
                 window = rets[d - p.vol_lookback_days + 1 : d + 1]
                 sd = stdev(window)  # len(window) >= 2 required
                 vol[d] = sd * (365.0 ** 0.5) if len(window) >= 2 else 0.0  # annualized
         self._mom[sym] = (ds.open_time, mom)
+        self._mom_raw[sym] = (ds.open_time, raw)
+        self._h52[sym] = (ds.open_time, h52)
         self._vol[sym] = (ds.open_time, vol)
 
     # -- as-of queries -------------------------------------------------------
@@ -140,6 +157,16 @@ class SignalEngine:
         times, vol = self._vol[sym]
         i = bisect.bisect_right(times, ts - MS_PER_DAY) - 1
         return vol[i] if i >= 0 else 0.0
+
+    def mom_raw_at(self, sym, ts):
+        times, raw = self._mom_raw[sym]
+        i = bisect.bisect_right(times, ts - MS_PER_DAY) - 1
+        return raw[i] if i >= 0 and raw[i] is not None else None
+
+    def high52_ratio_at(self, sym, ts):
+        times, ratios = self._h52[sym]
+        i = bisect.bisect_right(times, ts - MS_PER_DAY) - 1
+        return ratios[i] if i >= 0 and ratios[i] is not None else None
 
     def funding_event_at(self, sym, ts):
         return self.market.funding_event_at(sym, ts)
@@ -175,6 +202,12 @@ class Context:
     def realized_vol(self, symbol):
         return self.engine.realized_vol_at(symbol, self.ts)
 
+    def mom_raw(self, symbol):
+        return self.engine.mom_raw_at(symbol, self.ts)
+
+    def high52_ratio(self, symbol):
+        return self.engine.high52_ratio_at(symbol, self.ts)
+
 
 class CompositeStrategy:
     """Combines trend + momentum + carry into target weights."""
@@ -187,6 +220,7 @@ class CompositeStrategy:
     def target_positions(self, ctx):
         p = self.params
         out = {}
+        xs = self._xs_sleeve(ctx)
         for sym in self.symbols:
             trend = ctx.trend(sym)
             mom = ctx.momentum(sym)
@@ -202,6 +236,53 @@ class CompositeStrategy:
             if p.funding_ann_threshold > 0 and p.carry_weight > 0:
                 carry = -clamp(ann / p.funding_ann_threshold, -1.0, 1.0) * p.carry_weight
 
-            w = core * scale + carry
+            w = core * scale + carry + xs.get(sym, 0.0)
             out[sym] = w if abs(w) > 1e-6 else 0.0
+        return out
+
+    def _xs_sleeve(self, ctx):
+        """Cross-sectional sleeve. Ranks the universe on two unit-free scores
+        (30d trailing return and close/365d-high proximity), goes long the top
+        N and short the bottom N, market-neutral by construction. Evidence:
+        crypto cross-section is momentum-dominated (AQR-style factor migration);
+        the 52-week-high effect is the stronger documented momentum variant;
+        short-term reversal in crypto is documented as weak -> not included.
+        """
+        p = self.params
+        out = {s: 0.0 for s in self.symbols}
+        if p.xs_weight <= 0:
+            return out
+        mom, h52 = {}, {}
+        for s in self.symbols:
+            m = ctx.mom_raw(s)
+            h = ctx.high52_ratio(s)
+            if m is not None:
+                mom[s] = m
+            if h is not None:
+                h52[s] = h
+        if len(mom) < 2 * p.xs_top_n and len(h52) < 2 * p.xs_top_n:
+            return out
+
+        def ranks(d):
+            n = len(d)
+            if n <= 1:
+                return {k: 0.5 for k in d}
+            order = sorted(d, key=d.get)
+            return {k: i / (n - 1) for i, k in enumerate(order)}
+
+        rm, rh = ranks(mom), ranks(h52)
+        scores = {}
+        for s in self.symbols:
+            if s not in rm and s not in rh:
+                continue
+            scores[s] = p.xs_mom_share * rm.get(s, 0.5) + p.xs_high52_share * rh.get(s, 0.5)
+        ranked = sorted(scores, key=lambda k: (scores[k], k))
+        n = min(p.xs_top_n, len(ranked) // 2)
+        if n == 0:
+            return out
+        leg = p.xs_weight / (2.0 * n)
+        for s in ranked[-n:]:
+            out[s] += leg
+        for s in ranked[:n]:
+            out[s] -= leg
         return out

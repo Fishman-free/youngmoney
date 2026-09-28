@@ -2,7 +2,7 @@
   "capital": 10000.0,
   "base_currency": "USDT",
   "target_vol": 0.20,
-  "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+  "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "LINKUSDT", "XRPUSDT", "DOGEUSDT"],
   "data": {
     "start": "2024-01-01",
     "intervals": ["4h", "1d"],
@@ -22,7 +22,12 @@
     "max_vol_scale": 2.0,
     "funding_smooth_events": 3,
     "rebalance_band": 0.12,
-    "rebalance_mode": "edge"
+    "rebalance_mode": "edge",
+    "xs_weight": 0.6,
+    "xs_top_n": 2,
+    "xs_mom_lookback_days": 30,
+    "xs_mom_share": 0.6,
+    "xs_high52_share": 0.4
   },
   "risk": {
     "max_gross_leverage": 2.0,

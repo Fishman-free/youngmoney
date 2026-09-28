@@ -109,6 +109,54 @@ class TestCarryTilt(unittest.TestCase):
         self.assertAlmostEqual(strat1.engine.ann_funding_at(SYM, ts), 0.03 * 3 * 365.0)
 
 
+class TestCrossSectional(unittest.TestCase):
+    def _market(self):
+        from bnbot.data import BarSeries, MS_PER_DAY
+        from synth import T0, kline_rows, make_market
+        md = make_market("AAAUSDT", closes4h=[100.0] * 200, closes1d=[100.0] * 60)
+        # AAA: steady winner (up ~50%), BBB: mild winner, CCC: mild loser, DDD: deep loser
+        paths = {
+            "AAAUSDT": [100.0 * (1.01 ** i) for i in range(120)],
+            "BBBUSDT": [100.0 * (1.003 ** i) for i in range(120)],
+            "CCCUSDT": [100.0 * (0.998 ** i) for i in range(120)],
+            "DDDUSDT": [100.0 * (0.985 ** i) for i in range(120)],
+        }
+        times1 = [T0 + i * MS_PER_DAY for i in range(120)]
+        times4 = [T0 + i * 4 * MS_PER_HOUR for i in range(200)]
+        for sym, closes in paths.items():
+            rows = kline_rows(times1, closes, step_ms=MS_PER_DAY)
+            md.klines[(sym, "1d")] = BarSeries(sym, "1d", rows)
+            flat = kline_rows(times4, [closes[-1]] * 200)
+            md.klines[(sym, "4h")] = BarSeries(sym, "4h", flat)
+            md.funding[sym] = {"times": [], "rates": []}
+        return md
+
+    def test_xs_sleeve_long_winners_short_losers(self):
+        md = self._market()
+        cfg = make_config("unused", symbols=("AAAUSDT", "BBBUSDT", "CCCUSDT", "DDDUSDT"))
+        strat = CompositeStrategy(cfg, md, overrides={
+            "weight_trend": 0.0, "weight_mom": 0.0, "carry_weight": 0.0,
+            "xs_weight": 0.6, "xs_top_n": 2,
+        })
+        w = strat.target_positions(Context(strat.engine, T0 + 110 * 24 * MS_PER_HOUR))
+        self.assertGreater(w["AAAUSDT"], 0.0)  # strongest -> long
+        self.assertGreater(w["BBBUSDT"], 0.0)
+        self.assertLess(w["CCCUSDT"], 0.0)
+        self.assertLess(w["DDDUSDT"], 0.0)  # weakest -> short
+        self.assertAlmostEqual(sum(w.values()), 0.0, places=6)  # market neutral
+        self.assertAlmostEqual(sum(abs(v) for v in w.values()), 0.6, places=6)  # gross = xs_weight
+
+    def test_xs_sleeve_disabled_by_default(self):
+        md = self._market()
+        cfg = make_config("unused", symbols=("AAAUSDT", "BBBUSDT", "CCCUSDT", "DDDUSDT"))
+        strat = CompositeStrategy(cfg, md, overrides={
+            "weight_trend": 0.0, "weight_mom": 0.0, "carry_weight": 0.0,
+        })
+        w = strat.target_positions(Context(strat.engine, T0 + 110 * 24 * MS_PER_HOUR))
+        for v in w.values():
+            self.assertAlmostEqual(v, 0.0, places=6)
+
+
 class TestInterface(unittest.TestCase):
     def test_target_positions_covers_all_symbols(self):
         from bnbot.data import BarSeries
