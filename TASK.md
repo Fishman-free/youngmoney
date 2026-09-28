@@ -1,7 +1,7 @@
 # 任务书：Binance 中低频自动化交易平台（paper-first）
 
 ## 目标
-在本目录（C:\Users\21560\Desktop\binance）从零搭建一个**Binance USDT-M 合约中低频自动化交易平台**，以历史回测 + 纸面交易（paper trading）为第一阶段，年化收益目标 15%+（目标不是承诺，回测要诚实呈现风险）。
+在本目录从零搭建一个**Binance USDT-M 合约中低频自动化交易平台**，以历史回测 + 纸面交易（paper trading）为第一阶段，年化收益目标 15%+（目标不是承诺，回测要诚实呈现风险）。
 
 ## 硬性约束
 - Windows + PowerShell 5.1 环境；Python 3.14 在 PATH（`python`）。**只用标准库**（urllib/json/csv/unittest），不 pip install 任何包。

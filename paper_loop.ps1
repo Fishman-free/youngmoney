@@ -1,6 +1,6 @@
 # bnbot paper 前向观察循环：每 4h 跑一轮 paper，出错继续，日志滚动写 logs/paper-loop.log
 $ErrorActionPreference = "Continue"
-Set-Location "C:\Users\21560\Desktop\binance"
+Set-Location $PSScriptRoot
 $env:HTTPS_PROXY = "http://127.0.0.1:7890"
 $env:HTTP_PROXY = "http://127.0.0.1:7890"
 while ($true) {
