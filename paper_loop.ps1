@@ -5,7 +5,8 @@ $env:HTTPS_PROXY = "http://127.0.0.1:7890"
 $env:HTTP_PROXY = "http://127.0.0.1:7890"
 while ($true) {
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $s = python -m bnbot.sentiment --once --proxy http://127.0.0.1:7890 2>&1 | Out-String
     $out = python -m bnbot.live --paper --once 2>&1 | Out-String
-    Add-Content -Path "logs\paper-loop.log" -Value "=== $ts ===`n$out" -Encoding UTF8
+    Add-Content -Path "logs\paper-loop.log" -Value "=== $ts ===`n$s$out" -Encoding UTF8
     Start-Sleep -Seconds (4 * 3600)
 }

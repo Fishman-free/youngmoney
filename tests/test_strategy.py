@@ -109,6 +109,56 @@ class TestCarryTilt(unittest.TestCase):
         self.assertAlmostEqual(strat1.engine.ann_funding_at(SYM, ts), 0.03 * 3 * 365.0)
 
 
+class TestVolumeConfirm(unittest.TestCase):
+    def _rows(self, vols):
+        # 80 bars: flat 100 then breakout to 101 on the last bar
+        rows = []
+        for i in range(80):
+            c = 101.0 if i == 79 else 100.0
+            rows.append({
+                "open_time": T0 + i * 4 * MS_PER_HOUR, "open": c, "high": c + 0.5,
+                "low": c - 0.5, "close": c, "volume": vols[i],
+                "close_time": T0 + (i + 1) * 4 * MS_PER_HOUR - 1,
+            })
+        return rows
+
+    def _engine(self, vols, vol_confirm_min):
+        from bnbot.data import BarSeries
+        from bnbot.strategy import CompositeStrategy, StrategyParams
+        from synth import make_market
+        md = make_market(SYM, closes4h=[100.0] * 80, closes1d=[100.0] * 80)
+        md.klines[(SYM, "4h")] = BarSeries(SYM, "4h", self._rows(vols))
+        cfg = make_config("unused")
+        params = StrategyParams.from_config(cfg, {
+            "donchian_window": 10, "ema_fast": 2, "ema_slow": 5,
+            "vol_confirm_min": vol_confirm_min,
+        })
+        return CompositeStrategy(cfg, md, overrides={
+            "donchian_window": 10, "ema_fast": 2, "ema_slow": 5,
+            "vol_confirm_min": vol_confirm_min,
+        })
+
+    def test_low_volume_breakout_rejected(self):
+        # prior volume non-flat (alternating), breakout bar volume unremarkable
+        vols = [0.5 if i % 2 == 0 else 1.5 for i in range(79)] + [1.0]
+        strat = self._engine(vols, vol_confirm_min=0.5)
+        # 查询点在突破根收盘之后（trend_at 有防前视滞后）
+        w = strat.target_positions(Context(strat.engine, T0 + 80 * 4 * MS_PER_HOUR))
+        self.assertAlmostEqual(w[SYM], 0.0, places=6)  # breakout not trusted
+
+    def test_high_volume_breakout_accepted(self):
+        vols = [0.5 if i % 2 == 0 else 1.5 for i in range(79)] + [10.0]
+        strat = self._engine(vols, vol_confirm_min=0.5)
+        w = strat.target_positions(Context(strat.engine, T0 + 80 * 4 * MS_PER_HOUR))
+        self.assertGreater(w[SYM], 0.0)  # volume-confirmed breakout goes long
+
+    def test_confirm_disabled_keeps_legacy_semantics(self):
+        vols = [0.5 if i % 2 == 0 else 1.5 for i in range(79)] + [1.0]
+        strat = self._engine(vols, vol_confirm_min=0.0)
+        w = strat.target_positions(Context(strat.engine, T0 + 80 * 4 * MS_PER_HOUR))
+        self.assertGreater(w[SYM], 0.0)  # default off: breakout accepted as before
+
+
 class TestCrossSectional(unittest.TestCase):
     def _market(self):
         from bnbot.data import BarSeries, MS_PER_DAY

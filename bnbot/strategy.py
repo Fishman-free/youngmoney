@@ -46,6 +46,7 @@ class StrategyParams:
     xs_mom_lookback_days: int = 30
     xs_mom_share: float = 0.6
     xs_high52_share: float = 0.4
+    vol_confirm_min: float = 0.0
 
     @classmethod
     def from_config(cls, config, overrides=None):
@@ -99,9 +100,11 @@ class SignalEngine:
                 hi = max(bs.high[j - win : j])  # previous `win` bars, current excluded
                 lo = min(bs.low[j - win : j])
                 if bs.close[j] > hi:
-                    raw = 1
+                    if self._volume_confirm(bs, j):
+                        raw = 1
                 elif bs.close[j] < lo:
-                    raw = -1
+                    if self._volume_confirm(bs, j):
+                        raw = -1
                 s = raw
                 if raw == 1 and ef[j] <= es[j]:
                     s = 0
@@ -109,6 +112,27 @@ class SignalEngine:
                     s = 0
                 sig[j] = s
         self._trend[sym] = (bs.open_time, INTERVAL_MS["4h"], sig)
+
+    def _volume_confirm(self, bs, j):
+        """Breakout-on-volume: only accept a NEW trend direction when the
+        breakout bar's own volume is >= vol_confirm_min z-scores above its
+        trailing 20-bar mean. vol_confirm_min<=0 disables (legacy semantics).
+        The breakout bar is closed at signal time, so its volume is as-of safe.
+        """
+        p = self.params
+        if p.vol_confirm_min <= 0:
+            return True
+        window = bs.volume[max(0, j - 20) : j]
+        if len(window) < 10:
+            return True
+        m = sum(window) / len(window)
+        if m <= 0:
+            return True
+        sd = stdev(window) if len(window) >= 2 else 0.0
+        if sd <= 0:
+            return True  # flat volume series -> no disconfirmation
+        z = (bs.volume[j] - m) / sd
+        return z >= p.vol_confirm_min
 
     def _precompute_mom_vol(self, sym):
         p = self.params

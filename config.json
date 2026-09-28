@@ -27,7 +27,8 @@
     "xs_top_n": 2,
     "xs_mom_lookback_days": 30,
     "xs_mom_share": 0.6,
-    "xs_high52_share": 0.4
+    "xs_high52_share": 0.4,
+    "vol_confirm_min": 0.5
   },
   "risk": {
     "max_gross_leverage": 2.0,
