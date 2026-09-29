@@ -38,6 +38,7 @@ from .data import (
 )
 from .risk import RiskManager
 from .strategy import CompositeStrategy, Context
+from .verify import SignalVerifier
 
 
 class RealExecutor:
@@ -120,6 +121,23 @@ def append_order_log(log_dir, records):
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
     return fname
 
+STATE_MD_MAX_LINES = 400  # loop lesson: state file is the audit log, keep ~400 lines
+
+
+def append_state_log(path, block):
+    """Append an audit block to STATE.md, rolling to ~400 lines.
+    When the loop loses money this file is the only debugging surface."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    prev = []
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            prev = f.read().splitlines()
+    lines = prev + block.splitlines() + [""]
+    if len(lines) > STATE_MD_MAX_LINES:
+        lines = ["(earlier history truncated; full log in logs/orders-*.log)"] + lines[-(STATE_MD_MAX_LINES - 1):]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
 
 # ---------------------------------------------------------------------------
 # one paper round
@@ -191,7 +209,20 @@ def paper_round(cfg, client, mode="paper"):
             "weight_target": tw, "weight_current": cur_w[s],
             "signals": {"trend": ctx.trend(s), "mom": ctx.momentum(s),
                         "ann_funding": round(ctx.ann_funding(s), 6)},
+            "reduce_only": flatten or (cur_qty != 0.0 and delta_qty * cur_qty < 0),
         })
+
+    # maker-checker: the strategy made these orders; the verifier judges them.
+    # Rejected orders never reach the simulated fills below.
+    verifier = SignalVerifier(market, marks, cfg["verify"] if "verify" in cfg else None)
+    accepted, rejected = [], []
+    for o in orders:
+        ok, reason = verifier.verify(o, ctx)
+        if ok:
+            accepted.append(o)
+        else:
+            rejected.append((o, reason))
+    orders = accepted
 
     # simulated fills: cash moves by signed delta notional + fee
     for o in orders:
@@ -213,10 +244,23 @@ def paper_round(cfg, client, mode="paper"):
         "equity": round(equity, 2), "cash": round(float(state["cash"]), 2),
         "kill_switch": risk.kill_switch_active(),
         "target_weights": {s: round(target.get(s, 0.0), 4) for s in symbols},
-        "orders": len(orders),
+        "orders": len(orders), "rejected": len(rejected),
     }
     log_path = append_order_log(log_dir, orders + [summary])
     save_state(state_path, state)
+    # STATE.md audit block (the loop's debugging surface when it loses money)
+    lines = [f"## {summary['ts']}  equity={summary['equity']:,.2f}  "
+             f"orders={summary['orders']}  rejected={summary['rejected']}"]
+    lines.append("targets: " + "  ".join(f"{s}={target.get(s, 0.0):+.3f}" for s in symbols))
+    for o in orders:
+        lines.append(f"  EXEC {o['side']} {o['symbol']} qty={o['qty']} @ {o['price']:,.2f}"
+                     f" (trend={o['signals']['trend']} mom={o['signals']['mom']})")
+    for o, reason in rejected:
+        lines.append(f"  REJ  {o['side']} {o['symbol']} qty={o['qty']} -> {reason}")
+        if not o.get("reduce_only"):
+            lines.append(f"  LESSON {summary['ts'][:10]}: new {o['side']} {o['symbol']} blocked by"
+                         f" verifier ({reason.split()[0]}); check signal quality before re-entry")
+    append_state_log(os.path.join(os.path.dirname(state_path), "STATE.md"), "\n".join(lines))
     return summary, orders, log_path
 
 
