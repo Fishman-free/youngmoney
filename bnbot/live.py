@@ -224,6 +224,26 @@ def paper_round(cfg, client, mode="paper"):
             rejected.append((o, reason))
     orders = accepted
 
+    # probabilistic judgment gate (auxiliary): atomic battery on the state
+    # snapshot; vetoes NEW exposure only. Deterministic layers outrank it.
+    jcfg = cfg.get("judgment", {})
+    if jcfg.get("enabled", True):
+        from .judgment import JudgmentLayer, build_state_snapshot
+        jlayer = JudgmentLayer(os.path.join(os.path.dirname(state_path), "judgment-log.jsonl"),
+                               policy=jcfg.get("policy"))
+        still_ok = []
+        for o in orders:
+            if o.get("reduce_only"):
+                still_ok.append(o)  # risk-reducing orders never gated
+                continue
+            snap = build_state_snapshot(o["symbol"], ctx, equity=equity)
+            allow, jreason = jlayer.gate(jlayer.ask(snap))
+            if allow:
+                still_ok.append(o)
+            else:
+                rejected.append((o, jreason))
+        orders = still_ok
+
     # simulated fills: cash moves by signed delta notional + fee
     for o in orders:
         s = o["symbol"]

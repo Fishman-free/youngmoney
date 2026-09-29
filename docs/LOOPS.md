@@ -8,7 +8,7 @@
 | Automation 心跳 | cron/webhook 无人触发 | `paper_loop.ps1`（4h 一轮 + 开机自启）+ `bnbot.sentiment` 每日幂等 |
 | Skill 程序手册 | SKILL.md 存规则与教训 | `docs/FACTORS.md`（因子验证纪律）+ 本文件 + 每轮 LESSON 写回 STATE.md |
 | State file 记忆 | 跨运行状态 + 审计日志，约 400 行 | `state/portfolio.json`（结构化）+ `state/STATE.md`（叙事审计，滚动 400 行，亏钱时唯一调试面） |
-| Verifier 校验者 | maker-checker 分离，maker 不当裁判 | `bnbot/verify.py`（独立确定性规则 D1-D3，逐单过检，拒绝单入审计） |
+| Verifier 校验者 | maker-checker 分离，maker 不当裁判 | `bnbot/verify.py`（独立确定性规则 D1-D3，逐单过检，拒绝入审计）+ `bnbot/judgment.py`（laya 概率判断层，J1-J4 门控只否决新开仓） |
 | Worktrees 隔离 | 多 agent 并行不互踩 | 单进程系统暂不需要；研究/回测/纸面通过进程分离 |
 | Connectors 接手 | MCP/交易所 API | `bnbot/data.py` REST + Binance MCP（81 工具） |
 
