@@ -109,6 +109,48 @@ class TestCarryTilt(unittest.TestCase):
         self.assertAlmostEqual(strat1.engine.ann_funding_at(SYM, ts), 0.03 * 3 * 365.0)
 
 
+class TestXsCarry(unittest.TestCase):
+    def _market(self):
+        from bnbot.data import BarSeries, MS_PER_DAY
+        from synth import T0, kline_rows, make_market
+        md = make_market("AAAUSDT", closes4h=[100.0] * 200, closes1d=[100.0] * 120)
+        rates = {"AAAUSDT": 0.01, "BBBUSDT": 0.02, "CCCUSDT": -0.02, "DDDUSDT": 0.03}
+        times1 = [T0 + i * MS_PER_DAY for i in range(120)]
+        times4 = [T0 + i * 4 * MS_PER_HOUR for i in range(200)]
+        for sym, r in rates.items():
+            md.klines[(sym, "1d")] = BarSeries(sym, "1d", kline_rows(times1, [100.0] * 120, step_ms=MS_PER_DAY))
+            md.klines[(sym, "4h")] = BarSeries(sym, "4h", kline_rows(times4, [100.0] * 200))
+            ev = [T0 + (100 + k) * MS_PER_DAY for k in range(3)]
+            md.funding[sym] = {"times": ev, "rates": [r, r, r]}
+        return md
+
+    def test_long_cheap_funding_short_rich_funding(self):
+        md = self._market()
+        cfg = make_config("unused", symbols=("AAAUSDT", "BBBUSDT", "CCCUSDT", "DDDUSDT"))
+        strat = CompositeStrategy(cfg, md, overrides={
+            "weight_trend": 0.0, "weight_mom": 0.0, "carry_weight": 0.0,
+            "xs_weight": 0.0, "funding_smooth_events": 1, "xs_carry_weight": 0.3,
+        })
+        w = strat.target_positions(Context(strat.engine, T0 + 110 * MS_PER_DAY))
+        self.assertGreater(w["CCCUSDT"], 0.0)  # funding -2%/8h -> long
+        self.assertGreater(w["AAAUSDT"], 0.0)  # 1% -> long
+        self.assertLess(w["DDDUSDT"], 0.0)     # 3%/8h -> short
+        self.assertLess(w["BBBUSDT"], 0.0)     # 2% -> short
+        self.assertAlmostEqual(sum(w.values()), 0.0, places=6)
+        self.assertAlmostEqual(sum(abs(v) for v in w.values()), 0.3, places=6)
+
+    def test_xs_carry_disabled_by_default(self):
+        md = self._market()
+        cfg = make_config("unused", symbols=("AAAUSDT", "BBBUSDT", "CCCUSDT", "DDDUSDT"))
+        strat = CompositeStrategy(cfg, md, overrides={
+            "weight_trend": 0.0, "weight_mom": 0.0, "carry_weight": 0.0, "xs_weight": 0.0,
+            "funding_smooth_events": 1,
+        })
+        w = strat.target_positions(Context(strat.engine, T0 + 110 * MS_PER_DAY))
+        for v in w.values():
+            self.assertAlmostEqual(v, 0.0, places=6)
+
+
 class TestVolumeConfirm(unittest.TestCase):
     def _rows(self, vols):
         # 80 bars: flat 100 then breakout to 101 on the last bar

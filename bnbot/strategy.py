@@ -47,6 +47,7 @@ class StrategyParams:
     xs_mom_share: float = 0.6
     xs_high52_share: float = 0.4
     vol_confirm_min: float = 0.0
+    xs_carry_weight: float = 0.0
 
     @classmethod
     def from_config(cls, config, overrides=None):
@@ -245,6 +246,7 @@ class CompositeStrategy:
         p = self.params
         out = {}
         xs = self._xs_sleeve(ctx)
+        xsc = self._xs_carry_sleeve(ctx)
         for sym in self.symbols:
             trend = ctx.trend(sym)
             mom = ctx.momentum(sym)
@@ -260,8 +262,35 @@ class CompositeStrategy:
             if p.funding_ann_threshold > 0 and p.carry_weight > 0:
                 carry = -clamp(ann / p.funding_ann_threshold, -1.0, 1.0) * p.carry_weight
 
-            w = core * scale + carry + xs.get(sym, 0.0)
+            w = core * scale + carry + xs.get(sym, 0.0) + xsc.get(sym, 0.0)
             out[sym] = w if abs(w) > 1e-6 else 0.0
+        return out
+
+    def _xs_carry_sleeve(self, ctx):
+        """Cross-sectional carry. Ranks the universe on trailing annualized
+        funding, goes LONG the cheapest funding (collects/keeps funding) and
+        SHORT the richest funding (pays funding to shorts), market-neutral.
+        Evidence: funding/basis carry is the institutional-grade strategy
+        (Bitwise carry fund); this is the AQR-style cross-sectional version,
+        complementary to the per-symbol absolute-threshold tilt above.
+        """
+        p = self.params
+        out = {s: 0.0 for s in self.symbols}
+        if p.xs_carry_weight <= 0:
+            return out
+        fund = {}
+        for s in self.symbols:
+            fund[s] = ctx.ann_funding(s)
+        n_sym = len(fund)
+        if n_sym < 2 * p.xs_top_n:
+            return out
+        order = sorted(fund, key=lambda k: (fund[k], k))
+        n = min(p.xs_top_n, n_sym // 2)
+        leg = p.xs_carry_weight / (2.0 * n)
+        for s in order[:n]:  # lowest funding -> long (earn/keep funding)
+            out[s] += leg
+        for s in order[-n:]:  # highest funding -> short (shorts collect funding)
+            out[s] -= leg
         return out
 
     def _xs_sleeve(self, ctx):
