@@ -78,9 +78,35 @@ class TestStatusServer(unittest.TestCase):
             self.assertEqual(snap["cash"], 123.45)
             self.assertEqual(snap["positions"], 2)
             self.assertIn("metrics", snap)
+            self.assertEqual(len(snap["position_list"]), 2)
+            self.assertIsInstance(snap["equity_series"], list)
             blocks = history(d, 5)
             self.assertEqual(len(blocks), 2)
             self.assertTrue(blocks[-1].startswith("## t2"))
+
+    def test_dashboard_served_verbatim_not_json_escaped(self):
+        """Regression: a str body must be served as-is, not json.dumps'd.
+
+        Bug found 2026-09-30: json-escaping the HTML turned every newline into a
+        literal \\n and every quote into \\", so the inline <script> failed to
+        parse in the browser and the dashboard rendered empty.
+        """
+        import re as _re
+        with tempfile.TemporaryDirectory() as d:
+            Handler.state_dir = d
+            srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            try:
+                base = f"http://127.0.0.1:{srv.server_address[1]}"
+                body = urllib.request.urlopen(base + "/dashboard", timeout=5).read().decode("utf-8")
+                self.assertIn("\n", body)                       # real newlines kept
+                self.assertNotIn("\\nfunction", body)           # not JSON-escaped
+                self.assertNotIn('\\"', body)
+                m = _re.search(r"<script>([\s\S]*)</script>", body)
+                self.assertIsNotNone(m)
+                self.assertIn("function tick", m.group(1))
+            finally:
+                srv.shutdown()
 
     def test_http_endpoints_live(self):
         with tempfile.TemporaryDirectory() as d:
@@ -97,7 +123,9 @@ class TestStatusServer(unittest.TestCase):
                 with urllib.request.urlopen(base + "/", timeout=5) as r:
                     self.assertEqual(json.loads(r.read())["cash"], 9.0)
                 with urllib.request.urlopen(base + "/dashboard", timeout=5) as r:
-                    self.assertIn(b"bnbot status", r.read())
+                    body = r.read()
+                    self.assertIn("bnbot", body.decode("utf-8"))
+                    self.assertIn("量化平台状态", body.decode("utf-8"))
                 with urllib.request.urlopen(base + "/nope", timeout=5) as r:  # noqa: F841
                     pass
             except urllib.error.HTTPError as e:
