@@ -292,10 +292,10 @@ def paper_round(cfg, client, mode="paper"):
     lines.append(f"orders: {json.dumps(records, ensure_ascii=False)[:900]}")
     lines.append("targets: " + "  ".join(f"{s}={target.get(s, 0.0):+.3f}" for s in symbols))
     for o in orders:
-        lines.append(f"  EXEC {o['side']} {o['symbol']} qty={o['qty']} @ {o['price']:,.2f}"
+        lines.append(f"  EXEC {o['side']} {o['symbol']} qty={o['qty']:.8g} @ {o['price']:,.2f}"
                      f" (trend={o['signals']['trend']} mom={o['signals']['mom']})")
     for o, reason in rejected:
-        lines.append(f"  REJ  {o['side']} {o['symbol']} qty={o['qty']} -> {reason}")
+        lines.append(f"  REJ  {o['side']} {o['symbol']} qty={o['qty']:.8g} -> {reason}")
         if not o.get("reduce_only"):
             lines.append(f"  LESSON {summary['ts'][:10]}: new {o['side']} {o['symbol']} blocked by"
                          f" verifier ({reason.split()[0]}); check signal quality before re-entry")

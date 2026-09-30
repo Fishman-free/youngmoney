@@ -32,12 +32,14 @@ DASH_HTML = """<!doctype html><html lang="zh"><meta charset="utf-8">
  .card .k{font-size:11px;color:#8b949e}
  .card .v{font-size:20px;font-weight:600}
  .g{color:#3fb950}.r{color:#f85149}.y{color:#d29922}
- table{border-collapse:collapse;width:100%;max-width:760px;font-size:13px}
+ table{border-collapse:collapse;width:100%;font-size:13px}
  td,th{padding:4px 10px;border-bottom:1px solid #21262d;text-align:left}
  th{color:#8b949e;font-weight:500}
  .muted{color:#6e7681;font-size:12px}
+ main{max-width:900px}
  svg{background:#161b22;border:1px solid #30363d;border-radius:8px}
 </style>
+<main>
 <h1>bnbot 量化平台状态 <span class="muted" id="ts"></span></h1>
 <div class="cards" id="cards">加载中…</div>
 <h2>权益曲线（来自审计日志）</h2>
@@ -46,6 +48,7 @@ DASH_HTML = """<!doctype html><html lang="zh"><meta charset="utf-8">
 <h2>持仓</h2><table id="pos"></table>
 <h2>最近成交</h2><table id="orders"></table>
 <p class="muted" id="foot"></p>
+</main>
 <script>
 function card(k,v,cls){return `<div class="card"><div class="k">${k}</div><div class="v ${cls||''}">${v}</div></div>`}
 function spark(xs){
