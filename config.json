@@ -62,7 +62,7 @@
         "symbols": ["DOGEUSDT", "XRPUSDT", "AVAXUSDT", "LINKUSDT"],
         "strategy": { "donchian_window": 12, "mom_lookback_days": 3, "xs_weight": 0.0,
                       "rebalance_band": 0.05, "max_vol_scale": 4.0 },
-        "risk": { "max_gross_leverage": 10.0, "max_symbol_weight": 1.0,
+        "risk": { "max_gross_leverage": 3.0, "max_symbol_weight": 0.5,
                   "daily_loss_stop": 0.06, "drawdown_throttle": 0.10,
                   "drawdown_halt": 0.30 } }
     ]

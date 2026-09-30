@@ -77,11 +77,33 @@ state/sleeves/<id>/KILL_SWITCH        该仓独立急停（建文件即平仓停
 logs/sleeves/<id>/orders-*.log        订单流水
 ```
 
-**C 仓进真钱的门禁**（缺一不可）：模拟盘 ≥200 笔成交、净期望（扣费用滑点）为正、
-最大回撤 ≤30%、kill switch 零触发。门禁未过前 `config.json` 里保持 `"enabled": false`。
+**C 仓进真钱的门禁**（脚本化判定，不是感觉）：
 
-杠杆上限写在 `bnbot/sleeves.py` 的 `SLEEVE_CEILINGS`，**配置只能收紧不能放松**——
+```powershell
+python -m bnbot.gate --sleeve C          # 人读报告 + 判定
+python -m bnbot.gate --sleeve C --json    # 机器读
+```
+
+| 门 | 判据 |
+|---|---|
+| G1 成交数 | ≥ 200 笔 |
+| G2 净期望 | > 0（按权益变化 ÷ 笔数） |
+| G3 最大回撤 | ≤ 30% |
+| G4 急停次数 | = 0 |
+
+**C 仓参数证据（2026-09-30 回测）**：walk-forward 在样本内**否决了快参数**（12/3d），
+选中最慢的 donchian=96/mom=30d；OOS 年化 +8.39%/Sharpe 0.41/最大回撤 **-19.89%**。
+该回撤发生在 ~0.47 倍平均敞口下，**按 10 倍杠杆放大即强平**。故 C 仓实配杠杆已从
+10x 降到 **3x**（代码硬顶 `SLEEVE_CEILINGS["C"]=10x` 保留，改回需你明确点头）。
+
+**杠杆上限写在 `bnbot/sleeves.py` 的 `SLEEVE_CEILINGS`**，配置只能收紧不能放松——
 即使改 config 也不会突破 A≤2x / B≤3x / C≤10x 的硬顶。
+
+```powershell
+python -m bnbot.sleeves --list                                    # 看三仓参数与配额
+python -m bnbot.sleeves --export C --out state/sleeves/C/backtest-config.json
+python -m bnbot.backtest --config state/sleeves/C/backtest-config.json --walk-forward
+```
 
 ## 4. 系统架构（五层，各司其职）
 

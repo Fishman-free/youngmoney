@@ -114,3 +114,60 @@ def aggregate(sleeves):
     tot["cash"] = round(tot["cash"], 2)
     tot["capital"] = round(tot["capital"], 2)
     return tot
+
+
+def main(argv=None):
+    """Inspect sleeves, or export one sleeve's full config for backtesting.
+
+    python -m bnbot.sleeves --list
+    python -m bnbot.sleeves --export C --out state/sleeves/C/backtest-config.json
+    """
+    import argparse
+    import json as _json
+
+    from .config import load_config
+
+    ap = argparse.ArgumentParser(prog="bnbot.sleeves", description="sleeve inspector/exporter")
+    ap.add_argument("--list", action="store_true")
+    ap.add_argument("--export", metavar="ID", help="sleeve id to export as a full config")
+    ap.add_argument("--out", default=None, help="write export here (default: stdout)")
+    ap.add_argument("--base-dir", default=".")
+    ap.add_argument("--config", default=None)
+    args = ap.parse_args(argv)
+
+    cfg = load_config(args.config)
+    sleeves = build_sleeves(cfg, base_dir=args.base_dir)
+    if not sleeves:
+        print("no `sleeves` section in config")
+        return 1
+
+    if args.list or not args.export:
+        print(f"{'id':3s} {'name':6s} {'share':>6s} {'capital':>10s} {'maxLev':>7s} "
+              f"{'ddHalt':>7s} {'symbols':<28s} enabled")
+        for s in sleeves:
+            m = s["sleeve"]
+            print(f"{m['id']:3s} {m['name']:6s} {m['share']:6.2f} {s['capital']:10,.0f} "
+                  f"{s['risk']['max_gross_leverage']:7.1f} {s['risk']['drawdown_halt']:7.2f} "
+                  f"{','.join(s['symbols']):<28s} {m['enabled']}")
+        return 0
+
+    sel = [s for s in sleeves if s["sleeve"]["id"] == args.export]
+    if not sel:
+        print(f"unknown sleeve id: {args.export}")
+        return 1
+    out = sel[0]
+    out.pop("sleeve", None)          # keep the exported file a plain trading config
+    text = _json.dumps(out, ensure_ascii=False, indent=2)
+    if args.out:
+        import os as _os
+        _os.makedirs(_os.path.dirname(args.out) or ".", exist_ok=True)
+        with open(args.out, "w", encoding="utf-8") as f:
+            f.write(text)
+        print(f"exported sleeve {args.export} -> {args.out}")
+    else:
+        print(text)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
