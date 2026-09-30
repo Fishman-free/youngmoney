@@ -39,6 +39,8 @@ from .data import (
 from .risk import RiskManager
 from .strategy import CompositeStrategy, Context
 from .verify import SignalVerifier
+from .metrics import Metrics
+from .orders import mark_sim_filled, new_intent
 
 
 class RealExecutor:
@@ -268,9 +270,26 @@ def paper_round(cfg, client, mode="paper"):
     }
     log_path = append_order_log(log_dir, orders + [summary])
     save_state(state_path, state)
+
+    # per-cycle counters (jev-trader's `totals` block)
+    rej_v = sum(1 for _, r in rejected if r.startswith("D"))
+    rej_j = sum(1 for _, r in rejected if r.startswith("J"))
+    records = [mark_sim_filled(new_intent(o, i)) for i, o in enumerate(orders, 1)]
+    fees = sum(o["fee"] for o in orders)
+    metrics = Metrics.load(os.path.join(os.path.dirname(state_path), "metrics.json"))
+    metrics.cycle(orders=len(orders), rejected_verifier=rej_v, rejected_judgment=rej_j,
+                  fills=len(records), late=any(r.startswith("J1") for _, r in rejected),
+                  fees=fees, equity=round(equity, 2))
+    metrics.save()
+    summary["totals"] = metrics.to_dict()
     # STATE.md audit block (the loop's debugging surface when it loses money)
     lines = [f"## {summary['ts']}  equity={summary['equity']:,.2f}  "
              f"orders={summary['orders']}  rejected={summary['rejected']}"]
+    t = summary["totals"]
+    lines.append(f"totals: cycles={t['cycles']} orders={t['orders']} fills={t['fills']} "
+                 f"rej_v={t['rejected_verifier']} rej_j={t['rejected_judgment']} "
+                 f"late={t['late']} fees={t['fees']:.2f}")
+    lines.append(f"orders: {json.dumps(records, ensure_ascii=False)[:900]}")
     lines.append("targets: " + "  ".join(f"{s}={target.get(s, 0.0):+.3f}" for s in symbols))
     for o in orders:
         lines.append(f"  EXEC {o['side']} {o['symbol']} qty={o['qty']} @ {o['price']:,.2f}"
