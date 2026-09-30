@@ -187,6 +187,8 @@ def main(argv=None):
     ap.add_argument("--fetch", help="comma-separated tickers, e.g. SOXL,ARM")
     ap.add_argument("--interval", default="1d", choices=sorted(INTERVAL_SECONDS))
     ap.add_argument("--range", dest="range_", default="5y")
+    ap.add_argument("--derive-4h", action="store_true",
+                    help="also pull 1h and resample to 4h (the engine grid uses 4h+1d)")
     ap.add_argument("--data-dir", default="data")
     ap.add_argument("--proxy", default=None)
     args = ap.parse_args(argv)
@@ -196,6 +198,12 @@ def main(argv=None):
 
     for sym in [s.strip().upper() for s in args.fetch.split(",") if s.strip()]:
         try:
+            if args.derive_4h:
+                hourly, src1 = fetch_chart_any(sym, "1h", "2y", proxy=args.proxy)
+                if hourly:
+                    four_h = resample(hourly, 4)
+                    p4, n4 = save_bars(args.data_dir, sym, "4h", four_h)
+                    print(f"[equity] {sym:6s} 4h  via resample({src1} 1h): {n4:5d} bars -> {p4}")
             bars, src = fetch_chart_any(sym, args.interval, args.range_, proxy=args.proxy)
             path, n = save_bars(args.data_dir, sym, args.interval, bars)
             if bars:

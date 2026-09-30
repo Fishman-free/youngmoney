@@ -439,24 +439,44 @@ class MarketData:
     def __init__(self):
         self.klines = {}  # (symbol, interval) -> BarSeries
         self.funding = {}  # symbol -> {"times": [int], "rates": [float]}
+        self.equities = set()  # symbols sourced from data/equities/ (no funding)
 
     @classmethod
-    def load(cls, data_dir, symbols, intervals):
+    def load(cls, data_dir, symbols, intervals, allow_equities=True):
+        """Load cached bars for every symbol/interval.
+
+        Crypto symbols come from `data/<SYM>_<itv>.csv` (+ funding). Symbols that
+        only exist as equities (`data/equities/<SYM>_<itv>.csv`, pulled by
+        bnbot.usstock) are accepted too: they simply carry no funding series, so
+        funding-aware factors contribute zero instead of failing the load.
+        """
         md = cls()
+        equity_syms = set()
         for sym in symbols:
             for itv in intervals:
                 rows = load_klines_csv(kline_path(data_dir, sym, itv))
                 if not rows:
-                    raise FileNotFoundError(
-                        f"missing cache {kline_path(data_dir, sym, itv)}; "
-                        "run `python -m bnbot.data --fetch` first"
-                    )
+                    if not allow_equities:
+                        raise FileNotFoundError(
+                            f"missing cache {kline_path(data_dir, sym, itv)}; "
+                            "run `python -m bnbot.data --fetch` first"
+                        )
+                    from .usstock import equity_kline_path, load_bars
+                    rows = load_bars(data_dir, sym, itv)
+                    if not rows:
+                        raise FileNotFoundError(
+                            f"missing cache for {sym} {itv}: tried "
+                            f"{kline_path(data_dir, sym, itv)} and "
+                            f"{equity_kline_path(data_dir, sym, itv)}"
+                        )
+                    equity_syms.add(sym)
                 md.klines[(sym, itv)] = BarSeries(sym, itv, rows)
             frows = load_funding_csv(funding_path(data_dir, sym))
             md.funding[sym] = {
                 "times": [r["funding_time"] for r in frows],
                 "rates": [r["funding_rate"] for r in frows],
             }
+        md.equities = equity_syms
         return md
 
     def funding_event_at(self, symbol, ts):

@@ -110,13 +110,49 @@ python -m bnbot.backtest --config state/sleeves/C/backtest-config.json --walk-fo
 ## 4. 系统架构（五层，各司其职）
 
 ```
-数据层 bnbot/data.py        增量抓 K 线/资金费率，网络失败自动降级用缓存
+数据层 bnbot/data.py        增量抓 K 线/资金费率，网络失败自动降级用缓存；
+                            MEXC 回退源；美股走 data/equities/（bnbot/usstock.py）
 信号层 bnbot/strategy.py    趋势(Donchian48) + 动量(30d) + 资金费率carry + 跨截面XS
+     bnbot/indicators.py    技术指标（MA/EMA/MACD/RSI/KDJ/布林/ATR，纯 Python）
 判定层 bnbot/verify.py      确定性验证器 D1-D3（数据/信号一致/波动率），拒绝开新仓
-     bnbot/judgment.py     概率判断层 J1-J4（laya 原子电池：regime/toxicity/setup）
+     bnbot/judgment.py      概率判断层 J1-J6（laya 六问电池：regime/toxicity/setup
+                            + 分析师三问 trend/risk/flow，角色思想取自 TradingAgents）
 风控层 bnbot/risk.py        杠杆/集中度/日亏/回撤 硬闸，kill switch 无协商
 执行层 bnbot/live.py        paper 撮合（真执行器 phase-2 待启用）+ 订单生命周期
 ```
+
+### 美股/港股（2026-09-30 接入）
+
+```powershell
+python -m bnbot.usstock --fetch SOXL,ARM --interval 1d --range 5y --derive-4h --proxy http://127.0.0.1:7890
+python -m scripts.equity_backtest --symbols SOXL,ARM
+```
+
+数据源：Yahoo chart v8（零鉴权）→ 回退东财 push2his。行格式与加密管线一致，
+`MarketData.load` 自动识别 `data/equities/` 下的标的（无资金费率，相关因子贡献 0）。
+
+实测（日线，IS/OOS 7:3）：
+
+| 标的 | IS 年化/Sharpe | OOS 年化/Sharpe | OOS 回撤 |
+|---|---|---|---|
+| SOXL | -2.84% / -0.24 | **+12.56% / 0.90** | 8.05% |
+| ARM | +1.86% / 0.25 | **+8.75% / 1.03** | 6.57% |
+
+注意：SOXL 样本内为负说明该配方对**制度（regime）敏感**，样本外好不代表稳健——
+这与加密那条线一样，要过门禁而非看单段数字。
+
+### 判断层六问电池（TradingAgents 启发）
+
+| 问题 | 类型 | 作用 |
+|---|---|---|
+| regime | choice | 制度判定 |
+| toxicity | noul | 超买/超卖回撤风险 |
+| setup | score 0-3 | 形态质量 |
+| trend_analyst | choice | 趋势分析师：方向背离则否决（J5） |
+| risk_analyst | noul | 风险分析师：下行风险高则否决（J6） |
+| flow_analyst | noul | 资金流分析师：**仅记录不拦截** |
+
+**角色只能否决，不能放大**——这是判断层的第一原则。
 
 优先级：**风控 > 验证器 > 判断层**。任何下层只能否决，不能放大。
 

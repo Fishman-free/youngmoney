@@ -30,6 +30,7 @@ POLICY = {
     "min_confidence": 0.50,     # abstain (veto new exposure) below answer_confidence
     "min_setup": 1.5,           # score 0-3 rubric
     "max_toxicity": 0.70,       # noul: P(overreaction) too high -> veto
+    "max_risk_elevated": 0.75,  # risk analyst: P(downside elevated) too high -> veto
     "battery_timeout_s": 10.0,  # deadline rule: on timeout, hold (veto)
     "on_missing": "pass",       # auxiliary layer: degrade to pass-through
 }
@@ -53,11 +54,37 @@ BATTERY = {
         "instructions": "How clean and tradeable is the current setup?",
         "criteria": ["no setup", "weak", "decent", "clean"],
     },
+    # analyst roles, adopted from TradingAgents-astock's multi-analyst layout:
+    # each role answers one narrow question, and the policy in code weighs them.
+    "trend_analyst": {
+        "type": "choice",
+        "instructions": "As a trend analyst: what is the prevailing trend?",
+        "criteria": {"strong_up": "clear higher highs and higher lows",
+                     "weak_up": "drifting up, momentum fading",
+                     "sideways": "no direction",
+                     "weak_down": "drifting down, selling easing",
+                     "strong_down": "clear lower highs and lower lows"},
+    },
+    "risk_analyst": {
+        "type": "noul",
+        "instructions": "As a risk analyst: is downside risk elevated right now?",
+    },
+    "flow_analyst": {
+        "type": "noul",
+        "instructions": "As a flow analyst: is the participation behind this move supportive?",
+    },
 }
 
 
-def build_state_snapshot(sym, ctx, equity=None, drawdown=None):
-    """Compact numeric state text from info strictly before ctx.ts."""
+def build_state_snapshot(sym, ctx, equity=None, drawdown=None, closes=None,
+                         highs=None, lows=None):
+    """Compact numeric state text from info strictly before ctx.ts.
+
+    When OHLC arrays are supplied, the classic indicators (RSI/MACD/布林/ATR,
+    adopted from global-stock-data's indicator layer) are folded into the
+    snapshot, so the judgment engine reasons over the same numbers the strategy
+    does instead of only the composite signals.
+    """
     trend = ctx.trend(sym)
     mom = ctx.momentum(sym)
     vol = ctx.realized_vol(sym)
@@ -69,6 +96,19 @@ def build_state_snapshot(sym, ctx, equity=None, drawdown=None):
         f"realized_vol {vol:.3f}",
         f"funding_ann {ann:.4f}",
     ]
+    if closes and len(closes) >= 30:
+        from .indicators import macd, rsi, sma
+        r14 = rsi(closes, 14)
+        m = macd(closes)
+        last = closes[-1]
+        ma20 = sma(closes, 20)[-1]
+        hist = m["hist"][-1]
+        if r14[-1] is not None:
+            parts.append(f"rsi14 {r14[-1]:.1f}")
+        if hist is not None:
+            parts.append(f"macd_hist {'pos' if hist > 0 else 'neg'}")
+        if ma20:
+            parts.append(f"price_vs_ma20 {'above' if last > ma20 else 'below'}")
     if equity is not None:
         parts.append(f"equity {equity:.0f}")
     if drawdown is not None:
@@ -109,10 +149,14 @@ class JudgmentLayer:
             self._log(snapshot, None, f"error:{type(e).__name__}")
             return None
 
-    def gate(self, answers):
+    def gate(self, answers, side=None):
         """Policy gate in code: (allow_new_exposure, reason).
         None answers follow policy on_missing: 'hold' (deadline rule) or
-        'pass' (auxiliary layer degrades to pass-through)."""
+        'pass' (auxiliary layer degrades to pass-through).
+
+        `side` (BUY/SELL) lets the analyst roles vote on direction; they can only
+        veto, never amplify.
+        """
         if not answers:
             allow = self.p.get("on_missing", "pass") == "pass"
             return allow, f"J1 no judgment (on_missing={self.p.get('on_missing', 'pass')})"
@@ -128,6 +172,17 @@ class JudgmentLayer:
             return False, f"J3 weak setup {setup:.2f}"
         if tox > self.p["max_toxicity"]:
             return False, f"J4 toxicity {tox:.2f}"
+
+        # analyst roles (TradingAgents-inspired), composed with coefficients here
+        trend_view = (answers.get("trend_analyst") or {}).get("choice")
+        if side and trend_view:
+            if side == "BUY" and trend_view in ("strong_down", "weak_down"):
+                return False, f"J5 trend analyst disagrees ({trend_view})"
+            if side == "SELL" and trend_view in ("strong_up", "weak_up"):
+                return False, f"J5 trend analyst disagrees ({trend_view})"
+        risk_hi = (answers.get("risk_analyst") or {}).get("noul", 0.0)
+        if risk_hi > self.p["max_risk_elevated"]:
+            return False, f"J6 downside risk elevated {risk_hi:.2f}"
         return True, "ok"
 
     def _log(self, snapshot, answers, status):

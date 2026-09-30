@@ -239,8 +239,10 @@ def paper_round(cfg, client, mode="paper"):
             if o.get("reduce_only"):
                 still_ok.append(o)  # risk-reducing orders never gated
                 continue
-            snap = build_state_snapshot(o["symbol"], ctx, equity=equity)
-            allow, jreason = jlayer.gate(jlayer.ask(snap))
+            bs = market.klines.get((o["symbol"], "4h")) or market.klines.get((o["symbol"], "1d"))
+            closes = list(bs.close) if bs is not None else None
+            snap = build_state_snapshot(o["symbol"], ctx, equity=equity, closes=closes)
+            allow, jreason = jlayer.gate(jlayer.ask(snap), side=o["side"])
             if allow:
                 still_ok.append(o)
             else:

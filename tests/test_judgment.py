@@ -91,5 +91,76 @@ class TestJudgmentGate(unittest.TestCase):
         self.assertIn("trend_signal", snap)
 
 
+class TestAnalystRoles(unittest.TestCase):
+    """Roles adopted from TradingAgents-astock: each answers one narrow question."""
+
+    def _layer(self, answers, tmp):
+        jl = JudgmentLayer(os.path.join(tmp, "j.jsonl"))
+        jl._router = FakeRouter(answers)
+        jl._engine = "fake"
+        return jl
+
+    def test_trend_analyst_vetoes_only_opposite_side(self):
+        ans = dict(GOOD, trend_analyst={"choice": "strong_down"})
+        with tempfile.TemporaryDirectory() as d:
+            jl = self._layer(ans, d)
+            allow, reason = jl.gate(jl.ask("s"), side="BUY")
+            self.assertFalse(allow)
+            self.assertIn("J5", reason)
+            allow2, reason2 = jl.gate(jl.ask("s"), side="SELL")
+            self.assertTrue(allow2, reason2)      # agrees with the direction
+            allow3, _ = jl.gate(jl.ask("s"))      # no side -> no directional veto
+            self.assertTrue(allow3)
+
+    def test_risk_analyst_veto(self):
+        ans = dict(GOOD, risk_analyst={"noul": 0.9})
+        with tempfile.TemporaryDirectory() as d:
+            jl = self._layer(ans, d)
+            allow, reason = jl.gate(jl.ask("s"), side="BUY")
+            self.assertFalse(allow)
+            self.assertIn("J6", reason)
+
+    def test_flow_analyst_is_advisory_only(self):
+        ans = dict(GOOD, flow_analyst={"noul": 0.99})
+        with tempfile.TemporaryDirectory() as d:
+            jl = self._layer(ans, d)
+            allow, reason = jl.gate(jl.ask("s"), side="BUY")
+            self.assertTrue(allow, reason)        # logged, never blocks
+
+    def test_battery_has_analyst_roles(self):
+        from bnbot.judgment import BATTERY
+        for role in ("regime", "toxicity", "setup", "trend_analyst",
+                     "risk_analyst", "flow_analyst"):
+            self.assertIn(role, BATTERY)
+
+
+class TestSnapshotIndicators(unittest.TestCase):
+    class Ctx:
+        def trend(self, s):
+            return 1
+
+        def momentum(self, s):
+            return 1
+
+        def realized_vol(self, s):
+            return 0.35
+
+        def ann_funding(self, s):
+            return 0.08
+
+    def test_snapshot_without_bars_has_composite_signals(self):
+        snap = build_state_snapshot("BTCUSDT", self.Ctx(), equity=1000.0)
+        self.assertIn("trend_signal 1", snap)
+        self.assertNotIn("rsi14", snap)
+
+    def test_snapshot_with_bars_folds_in_indicators(self):
+        closes = [100.0 + (i % 5) * 0.5 for i in range(60)]
+        snap = build_state_snapshot("SOXL", self.Ctx(), equity=1000.0, closes=closes)
+        self.assertIn("rsi14", snap)
+        self.assertIn("macd_hist", snap)
+        self.assertIn("price_vs_ma20", snap)
+        self.assertLess(len(snap), 400)           # article: compact state only
+
+
 if __name__ == "__main__":
     unittest.main()
