@@ -186,7 +186,7 @@ def paper_round(cfg, client, mode="paper"):
         tw = target.get(s, 0.0)
         cur_qty = positions.get(s, {}).get("qty", 0.0)
         px = marks[s]
-        filters = symbol_filters(cfg["data"]["data_dir"], s)
+        filters = symbol_filters(cfg["data"]["data_dir"], s, allow_synthetic=(mode != "real"))
         cw = cur_w[s]
         flatten = tw == 0.0 and abs(cur_qty) > 0
         if not flatten and abs(tw - cw) <= band:

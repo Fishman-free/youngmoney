@@ -156,6 +156,54 @@ def fetch_klines(client, symbol, interval, start_ms, end_ms=None):
     return [rows[t] for t in sorted(rows) if rows[t]["close_time"] < cutoff]
 
 
+MEXC_BASE = "https://api.mexc.com"
+MEXC_INTERVAL = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+                 "1h": "60m", "4h": "4h", "1d": "1d"}
+
+
+def fetch_klines_mexc(symbol, interval, start_ms, end_ms=None, proxy=None):
+    """Fallback kline source (MEXC spot) with a Binance-compatible row shape.
+
+    Used when the Binance endpoints are geo-blocked or unreachable, so a symbol
+    can still be researched. Rows are normalised to the same dict shape as
+    fetch_klines, which keeps cache files and everything downstream portable.
+    """
+    if proxy:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    else:
+        opener = urllib.request.build_opener()
+    itv = MEXC_INTERVAL.get(interval, interval)
+    step = INTERVAL_MS[interval]
+    rows = {}
+    cursor = start_ms
+    while True:
+        q = f"?symbol={symbol}&interval={itv}&startTime={cursor}&limit={KLINES_LIMIT}"
+        if end_ms is not None:
+            q += f"&endTime={end_ms - 1}"
+        req = urllib.request.Request(MEXC_BASE + "/api/v3/klines" + q,
+                                     headers={"User-Agent": "bnbot/0.1 (research)"})
+        with opener.open(req, timeout=30) as r:
+            batch = json.loads(r.read().decode())
+        if not batch:
+            break
+        for k in batch:
+            rows[int(k[0])] = {
+                "open_time": int(k[0]),
+                "open": float(k[1]),
+                "high": float(k[2]),
+                "low": float(k[3]),
+                "close": float(k[4]),
+                "volume": float(k[5]),
+                "close_time": int(k[6]),
+            }
+        cursor = int(batch[-1][0]) + step
+        if len(batch) < KLINES_LIMIT:
+            break
+    cutoff = now_ms()
+    return [rows[t] for t in sorted(rows) if rows[t]["close_time"] < cutoff]
+
+
 def fetch_funding(client, symbol, start_ms, end_ms=None):
     """Fetch funding-rate events in [start_ms, end_ms); sorted, deduplicated."""
     rows = {}
@@ -266,7 +314,16 @@ def update_klines_cache(client, data_dir, symbol, interval, start_ms, end_ms=Non
         fetch_from = existing[-1]["open_time"] + INTERVAL_MS[interval]
     else:
         fetch_from = start_ms
-    new_rows = fetch_klines(client, symbol, interval, fetch_from, end_ms) if fetch_from < (end_ms or now_ms()) else []
+    if fetch_from < (end_ms or now_ms()):
+        try:
+            new_rows = fetch_klines(client, symbol, interval, fetch_from, end_ms)
+        except Exception as e:  # geo-block / outage -> alternate venue
+            print(f"[warn] binance klines failed for {symbol} {interval} ({e}); "
+                  f"falling back to MEXC")
+            new_rows = fetch_klines_mexc(symbol, interval, fetch_from, end_ms,
+                                        proxy=getattr(client, "proxy", None))
+    else:
+        new_rows = []
     merged = {r["open_time"]: r for r in existing}
     for r in new_rows:
         merged[r["open_time"]] = r
@@ -301,11 +358,16 @@ def update_exchange_info_cache(client, data_dir):
     return path
 
 
-def symbol_filters(data_dir, symbol):
+def symbol_filters(data_dir, symbol, allow_synthetic=False):
     """Trading rules for one symbol from the cached exchangeInfo.
 
     Returns dict with price_precision, quantity_precision, step_size,
     min_qty, min_notional.  Used for order quantity rounding.
+
+    Strict by default: an unknown symbol raises, because trading on invented
+    step sizes is how orders get rejected or mis-sized. Paper mode may pass
+    allow_synthetic=True for symbols sourced from an alternate venue (MEXC);
+    those rows are flagged `synthetic` so a real executor can refuse them.
     """
     with open(exchange_info_path(data_dir), "r", encoding="utf-8") as f:
         info = json.load(f)
@@ -322,6 +384,20 @@ def symbol_filters(data_dir, symbol):
                 "min_qty": float(lot["minQty"]),
                 "min_notional": float(notional.get("notional", 0.0)),
             }
+    # Symbols sourced from an alternate venue (e.g. MEXC) are not in Binance's
+    # exchangeInfo. Paper mode may proceed on conservative synthetic filters;
+    # real mode must not (the flag lets an executor refuse).
+    if allow_synthetic:
+        print(f"[warn] symbol {symbol} not in exchangeInfo cache; using synthetic filters "
+              f"(paper mode)")
+        return {
+            "price_precision": 4,
+            "quantity_precision": 4,
+            "step_size": 0.0001,
+            "min_qty": 0.0001,
+            "min_notional": 1.0,
+            "synthetic": True,
+        }
     raise KeyError(f"symbol {symbol} not found in exchangeInfo cache")
 
 
