@@ -48,7 +48,42 @@ python -m bnbot.server --port 8787
 | 判断层日志 | `state/judgment-log.jsonl` | laya 每次判断的状态与答案（校准三元组） |
 | 情绪记录 | `state/sentiment-shadow.csv` | 每日 X 情绪分（只记录，不参与下单） |
 
-## 3. 系统架构（五层，各司其职）
+## 3. 三仓框架（2026-09-30 上线）
+
+资金按三仓切分，**各有独立资金、独立风控、独立 kill switch**，一仓爆掉不碰其他仓：
+
+| 仓 | 占比 | 杠杆上限 | 内容 | 状态 |
+|---|---|---|---|---|
+| A 长线 | 60% | 2x | 7 标的趋势+carry+XS（已验证引擎） | 运行中 |
+| B 短线 | 30% | 3x | BTC/ETH/SOL，快参数（Donchian 24 / 动量 7d） | 运行中 |
+| C 实验 | 10% | 10x | 山寨高杠杆 | **门禁未过，模拟观察中** |
+
+```powershell
+# 跑一遍三仓（各自独立状态）
+python -m bnbot.live --sleeves --once --proxy http://127.0.0.1:7890
+
+# 只跑单仓（兼容旧命令）
+python -m bnbot.live --paper --once
+```
+
+隔离落盘位置（每仓一份，互不可见）：
+
+```
+state/sleeves/<id>/portfolio.json     资金与持仓
+state/sleeves/<id>/metrics.json       计数器
+state/sleeves/<id>/STATE.md           审计日志
+state/sleeves/<id>/judgment-log.jsonl laya 判断记录
+state/sleeves/<id>/KILL_SWITCH        该仓独立急停（建文件即平仓停止）
+logs/sleeves/<id>/orders-*.log        订单流水
+```
+
+**C 仓进真钱的门禁**（缺一不可）：模拟盘 ≥200 笔成交、净期望（扣费用滑点）为正、
+最大回撤 ≤30%、kill switch 零触发。门禁未过前 `config.json` 里保持 `"enabled": false`。
+
+杠杆上限写在 `bnbot/sleeves.py` 的 `SLEEVE_CEILINGS`，**配置只能收紧不能放松**——
+即使改 config 也不会突破 A≤2x / B≤3x / C≤10x 的硬顶。
+
+## 4. 系统架构（五层，各司其职）
 
 ```
 数据层 bnbot/data.py        增量抓 K 线/资金费率，网络失败自动降级用缓存
@@ -61,7 +96,7 @@ python -m bnbot.server --port 8787
 
 优先级：**风控 > 验证器 > 判断层**。任何下层只能否决，不能放大。
 
-## 4. 实盘开关（当前状态：关闭）
+## 5. 实盘开关（当前状态：关闭）
 
 实盘门禁写死在 `bnbot/report.py`，全部通过才谈实盘：
 
@@ -79,13 +114,13 @@ python -m bnbot.report
 
 **真金操作（划转/下单）必须你本人确认后我才执行。**
 
-## 5. 常驻与自启
+## 6. 常驻与自启
 
-- 已配：`Startup\bnbot_paper.vbs` 开机自启 paper 循环（机器重启自动恢复）
-- 手动重启：杀掉旧进程后 `python -m bnbot.live --paper --proxy ...`（后台）
+- 已配：`Startup\bnbot_paper.vbs` 开机自启三仓循环 + `bnbot_status.vbs` 自启状态服务
+- 手动重启：杀掉旧进程后 `python -m bnbot.live --sleeves --proxy ...`（后台）
 - 日志：`logs/paper-loop.log`
 
-## 6. 故障排查
+## 7. 故障排查
 
 | 症状 | 处理 |
 |---|---|
@@ -95,14 +130,14 @@ python -m bnbot.report
 | 行情抓不到 | 检查代理；数据层会自动降级用缓存，不会中断循环 |
 | 启动报错 laya | 判断层可选，缺失自动降级（`state/judgment-log.jsonl` 记 error） |
 
-## 7. 测试与验证
+## 8. 测试与验证
 
 ```powershell
-python -m unittest discover -s tests      # 58 项
+python -m unittest discover -s tests      # 66 项
 python "C:\Users\21560\AppData\Local\Temp\hermes-verify-bnbot-*.py"   # 留存验证载体，复跑即取证
 ```
 
-## 8. 数据来源说明
+## 9. 数据来源说明
 
 平台不吃任何专有/闭源数据（如幻方量化的训练数据不可得也没必要）：
 行情来自交易所公共接口，情绪面来自 X 检索，判断推理来自开源 laya 模型本地推理。

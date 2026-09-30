@@ -41,6 +41,7 @@ from .strategy import CompositeStrategy, Context
 from .verify import SignalVerifier
 from .metrics import Metrics
 from .orders import mark_sim_filled, new_intent
+from .sleeves import aggregate, build_sleeves
 
 
 class RealExecutor:
@@ -317,9 +318,41 @@ def run_paper(cfg, proxy, once):
         time.sleep(interval_h * 3600)
 
 
+def run_sleeves(cfg, proxy, once, base_dir=None):
+    """Run every enabled sleeve as its own isolated paper account."""
+    sleeves = build_sleeves(cfg, base_dir=base_dir)
+    enabled = [s for s in sleeves if s["sleeve"]["enabled"]]
+    skipped = [s["sleeve"]["id"] for s in sleeves if not s["sleeve"]["enabled"]]
+    if not enabled:
+        print("[sleeves] none enabled")
+        return 1
+    client = RestClient(proxy=proxy)
+    interval_h = float(cfg["live"].get("paper_interval_hours", 4))
+    if skipped:
+        print(f"[sleeves] disabled (paper gate not met): {', '.join(skipped)}")
+    while True:
+        for s in enabled:
+            meta = s["sleeve"]
+            try:
+                summary, orders, log_path = paper_round(s, client, mode="paper")
+                print(f"[sleeve {meta['id']} {meta['name']}] capital={s['capital']:,.0f} "
+                      f"equity={summary['equity']:,.2f} orders={summary['orders']} "
+                      f"rejected={summary['rejected']} log={log_path}")
+            except Exception as e:  # one sleeve failing must not stop the others
+                print(f"[sleeve {meta['id']}] ERROR {type(e).__name__}: {e}")
+        tot = aggregate(enabled)
+        print(f"[sleeves] total cash={tot['cash']:,.2f} capital={tot['capital']:,.2f} "
+              f"positions={tot['positions']} halted={tot['halted'] or 'none'}")
+        if once:
+            return 0
+        time.sleep(interval_h * 3600)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="bnbot.live", description="Paper trading loop (real mode is a stub)")
     ap.add_argument("--paper", action="store_true", help="run paper trading")
+    ap.add_argument("--sleeves", action="store_true",
+                    help="run the multi-sleeve framework (A long / B short / C experimental)")
     ap.add_argument("--once", action="store_true", help="single round then exit")
     ap.add_argument("--real", action="store_true", help="attempt real execution (raises NotImplementedError)")
     ap.add_argument("--proxy", default=None, help="explicit proxy, e.g. http://127.0.0.1:7890")
@@ -332,6 +365,8 @@ def main(argv=None):
         print("real mode: attempting order -> expected failure in phase 1")
         executor.place_order({"symbol": "BTCUSDT", "side": "BUY", "qty": 0.0})
         return 0
+    if args.sleeves:
+        return run_sleeves(cfg, args.proxy, args.once)
     if args.paper:
         return run_paper(cfg, args.proxy, args.once)
     ap.print_help()

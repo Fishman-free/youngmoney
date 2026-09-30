@@ -47,5 +47,24 @@
     "paper_interval_hours": 4,
     "state_file": "state/portfolio.json",
     "log_dir": "logs"
+  },
+  "sleeves": {
+    "enabled": true,
+    "list": [
+      { "id": "A", "name": "长线", "share": 0.6, "enabled": true },
+      { "id": "B", "name": "短线", "share": 0.3, "enabled": true,
+        "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+        "strategy": { "donchian_window": 24, "mom_lookback_days": 7, "xs_weight": 0.3,
+                      "rebalance_band": 0.08 },
+        "risk": { "max_gross_leverage": 3.0, "max_symbol_weight": 0.5,
+                  "daily_loss_stop": 0.04, "drawdown_halt": 0.20 } },
+      { "id": "C", "name": "实验", "share": 0.1, "enabled": false,
+        "symbols": ["DOGEUSDT", "XRPUSDT", "AVAXUSDT", "LINKUSDT"],
+        "strategy": { "donchian_window": 12, "mom_lookback_days": 3, "xs_weight": 0.0,
+                      "rebalance_band": 0.05, "max_vol_scale": 4.0 },
+        "risk": { "max_gross_leverage": 10.0, "max_symbol_weight": 1.0,
+                  "daily_loss_stop": 0.06, "drawdown_throttle": 0.10,
+                  "drawdown_halt": 0.30 } }
+    ]
   }
 }
