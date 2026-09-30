@@ -1,0 +1,12 @@
+[project]
+name = "bnbot"
+version = "0.1.0"
+description = "Mid/low-frequency crypto quant platform: trend + momentum + carry + XS factors, walk-forward validated, paper-first"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-q"
