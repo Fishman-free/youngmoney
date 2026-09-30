@@ -96,8 +96,10 @@ python -m bnbot.gate --sleeve C --json    # 机器读
 该回撤发生在 ~0.47 倍平均敞口下，**按 10 倍杠杆放大即强平**。故 C 仓实配杠杆已从
 10x 降到 **3x**（代码硬顶 `SLEEVE_CEILINGS["C"]=10x` 保留，改回需你明确点头）。
 
-**杠杆上限写在 `bnbot/sleeves.py` 的 `SLEEVE_CEILINGS`**，配置只能收紧不能放松——
-即使改 config 也不会突破 A≤2x / B≤3x / C≤10x 的硬顶。
+**注意 `enabled` 的语义**：`enabled: true` = 该仓进入**模拟盘**循环攒证据（包括 C 仓）；
+它**不代表可以进真钱**。真钱只有一条路：门禁四门全过 + 你本人明确点头。
+
+**杠杆上限写在 `bnbot/sleeves.py` 的 `SLEEVE_CEILINGS`**，配置只能收紧不能放松——即使改 config 也不会突破 A≤2x / B≤3x / C≤10x 的硬顶。
 
 ```powershell
 python -m bnbot.sleeves --list                                    # 看三仓参数与配额

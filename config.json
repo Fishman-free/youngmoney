@@ -58,7 +58,7 @@
                       "rebalance_band": 0.08 },
         "risk": { "max_gross_leverage": 3.0, "max_symbol_weight": 0.5,
                   "daily_loss_stop": 0.04, "drawdown_halt": 0.20 } },
-      { "id": "C", "name": "实验", "share": 0.1, "enabled": false,
+      { "id": "C", "name": "实验", "share": 0.1, "enabled": true,
         "symbols": ["DOGEUSDT", "XRPUSDT", "AVAXUSDT", "LINKUSDT"],
         "strategy": { "donchian_window": 12, "mom_lookback_days": 3, "xs_weight": 0.0,
                       "rebalance_band": 0.05, "max_vol_scale": 4.0 },
