@@ -10,6 +10,13 @@
 # 币安 451 地域风控期间数据层本来就靠 MEXC 回退，不该因此停摆。
 $ErrorActionPreference = "Continue"
 Set-Location $PSScriptRoot
+
+# 子进程（python）按 UTF-8 输出，而 PS 5.1 默认按 OEM 代码页（CN 是 GBK）解码，
+# 会把「长线」写成「闀跨嚎」。日志是审计面，必须可读——两端都钉死 UTF-8。
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+$env:PYTHONIOENCODING = "utf-8"
+
 $Proxy = "http://127.0.0.1:7890"
 $env:HTTPS_PROXY = $Proxy
 $env:HTTP_PROXY = $Proxy
