@@ -13,12 +13,27 @@ than a second LLM -- same separation principle, but reproducible and free.
 Checks (new positions only; risk-reducing orders always pass):
   D1 data sanity     mark price > 0, within `mark_dev` of the last 4h close
   D2 signal agreement new-direction orders need trend and momentum to agree
+                     (exact rule depends on `d2_mode`, see DEFAULTS)
   D3 volatility sanity realized vol in (0, vol_cap) annualized
+
+D2 modes ("all" is the project default and the only mode the trend-following
+sleeves A/B should use):
+  all    trend AND momentum must both agree with the order side  (default)
+  any    either one agreeing is enough
+  mom    momentum alone decides
+  trend  trend alone decides
+
+Sleeve C enters on fast momentum *before* the slow Donchian trend confirms, so
+under "all" every one of its openings was rejected (24 rejects / 0 fills over
+10 rounds on 2026-10-05, making its 200-trade gate structurally unreachable).
+The mode is therefore settable per sleeve via `sleeves.list[].verify`
+(see bnbot/sleeves.py); A and B keep "all".
 """
 
 DEFAULTS = {
     "mark_dev": 0.05,        # mark may deviate at most 5% from cached close
     "vol_cap": 2.0,          # annualized vol above 200% -> data/sanity reject
+    "d2_mode": "all",        # all | any | mom | trend   (see module docstring)
 }
 
 
@@ -49,13 +64,15 @@ class SignalVerifier:
         if last_close > 0 and abs(px / last_close - 1.0) > self.p["mark_dev"]:
             return False, f"D1 mark deviates {px / last_close - 1.0:+.2%} from close"
 
-        # D2 signal agreement: opening in a direction requires trend AND momentum
+        # D2 signal agreement: opening in a direction requires trend and momentum
         # to agree with the order side. (The maker may still hold conflicts --
         # the checker simply refuses to fund them with new exposure.)
+        # The exact rule is `d2_mode` (default "all"); faster sleeves that enter
+        # on momentum ahead of trend confirmation narrow it explicitly.
         trend = ctx.trend(s)
         mom = ctx.momentum(s)
         want = 1 if order["side"] == "BUY" else -1
-        if not (trend == want and mom == want):
+        if not self.d2_agrees(trend, mom, want):
             return False, f"D2 signal disagreement (trend={trend} mom={mom} side={want})"
 
         # D3 volatility sanity
@@ -64,3 +81,14 @@ class SignalVerifier:
             return False, f"D3 vol {vol:.2f} out of range"
 
         return True, "ok"
+
+    def d2_agrees(self, trend, mom, want):
+        """D2 rule under the configured mode. Unknown modes fall back to "all"."""
+        mode = str(self.p.get("d2_mode", "all")).strip().lower()
+        if mode == "mom":
+            return mom == want
+        if mode == "trend":
+            return trend == want
+        if mode == "any":
+            return trend == want or mom == want
+        return trend == want and mom == want          # "all" (default)

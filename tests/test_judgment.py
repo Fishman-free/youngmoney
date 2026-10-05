@@ -162,5 +162,92 @@ class TestSnapshotIndicators(unittest.TestCase):
         self.assertLess(len(snap), 400)           # article: compact state only
 
 
+class TestEngineLoadIsBounded(unittest.TestCase):
+    """A hung engine load must not paralyse the paper loop.
+
+    Measured 2026-10-06: huggingface_hub >= 1.x uses the Xet backend, whose Rust
+    client ignores HTTPS_PROXY, so the checkpoint fetch stalled at 0 bytes for
+    12+ minutes with the process idle on I/O. `except Exception` cannot catch a
+    hang, so the round (and the 4h loop behind it) blocked forever.
+    """
+
+    def test_xet_is_disabled_before_any_import(self):
+        from bnbot import judgment
+        self.assertEqual(os.environ.get("HF_HUB_DISABLE_XET"), "1",
+                         "Xet transport hangs behind the proxy; must be turned off")
+        self.assertIsNotNone(judgment)          # module imported cleanly
+
+    def test_hung_call_degrades_instead_of_blocking(self):
+        """laya loads its model LAZILY inside predict(), so the bound must wrap
+        the call -- bounding Router() construction guards nothing."""
+        import sys
+        import time as _time
+        import types
+
+        saved = sys.modules.get("laya")
+
+        class HangingRouter:                     # stands in for a stuck download
+            def predict(self, snapshot, questions):
+                _time.sleep(30)
+                return {"answers": {}}
+
+        fake = types.ModuleType("laya")
+        fake.Router = HangingRouter
+        sys.modules["laya"] = fake
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                log = os.path.join(d, "jlog.jsonl")
+                jl = JudgmentLayer(log, policy={"load_timeout_s": 0.3})
+                self.assertIsInstance(jl._get_router(), HangingRouter,
+                                      "Router() construction must stay cheap/lazy")
+                t0 = _time.time()
+                self.assertIsNone(jl.ask("snapshot"))
+                self.assertLess(_time.time() - t0, 5.0, "ask blocked on a hung call")
+
+                # auxiliary layer degrades to pass-through, and says why
+                allow, reason = jl.gate(None)
+                self.assertTrue(allow)
+                self.assertIn("J1", reason)
+
+                # the hang is recorded, not swallowed
+                with open(log, encoding="utf-8") as f:
+                    body = f.read()
+                self.assertIn('"status": "timeout"', body)
+
+                # a second call must degrade immediately, not wait again
+                t0 = _time.time()
+                self.assertIsNone(jl.ask("snapshot"))
+                self.assertLess(_time.time() - t0, 1.0)
+        finally:
+            if saved is not None:
+                sys.modules["laya"] = saved
+            else:
+                sys.modules.pop("laya", None)
+
+    def test_throwing_import_still_degrades(self):
+        import sys
+        import types
+
+        saved = sys.modules.get("laya")
+
+        def Router():
+            raise ImportError("no torch for you")
+
+        fake = types.ModuleType("laya")
+        fake.Router = Router
+        sys.modules["laya"] = fake
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                jl = JudgmentLayer(os.path.join(d, "jlog.jsonl"))
+                self.assertIsNone(jl.ask("snapshot"))
+                allow, _ = jl.gate(None)
+                self.assertTrue(allow)
+        finally:
+            if saved is not None:
+                sys.modules["laya"] = saved
+            else:
+                sys.modules.pop("laya", None)
+
+
 if __name__ == "__main__":
     unittest.main()

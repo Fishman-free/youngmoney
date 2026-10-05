@@ -67,6 +67,39 @@ class TestSleeveBuild(unittest.TestCase):
             self.assertEqual(sl[2]["risk"]["max_gross_leverage"],
                              SLEEVE_CEILINGS["C"]["max_gross_leverage"])   # 25 -> 10
 
+    def test_verify_overrides_merge_per_sleeve(self):
+        """A/B must keep the strict D2 default; only the sleeve that declares a
+        `verify` block narrows it."""
+        with tempfile.TemporaryDirectory() as d:
+            cfg = base_cfg(d)
+            cfg["sleeves"]["list"][2]["verify"] = {"d2_mode": "mom"}
+            sl = build_sleeves(cfg, base_dir=d)
+            a, b, c = sl
+            self.assertNotIn("d2_mode", a.get("verify", {}))
+            self.assertNotIn("d2_mode", b.get("verify", {}))
+            self.assertEqual(c["verify"]["d2_mode"], "mom")
+
+    def test_default_sleeves_narrow_d2_for_c_only(self):
+        """The built-in defaults must match config.json: C narrowed, A/B strict."""
+        cfg = {"capital": 10000.0, "symbols": ["BTCUSDT"], "strategy": {}, "risk": {},
+               "live": {}, "sleeves": {"enabled": True}}
+        modes = {s["sleeve"]["id"]: s.get("verify", {}).get("d2_mode")
+                 for s in build_sleeves(cfg)}
+        self.assertEqual(modes["C"], "mom")
+        self.assertIsNone(modes["A"])
+        self.assertIsNone(modes["B"])
+
+    def test_default_sleeves_raise_vol_cap_for_c_only(self):
+        """C's alt universe runs hotter than the global D3 cap (QNT ~3.77), so it
+        declares its own vol_cap; A/B keep the strict global default."""
+        cfg = {"capital": 10000.0, "symbols": ["BTCUSDT"], "strategy": {}, "risk": {},
+               "live": {}, "sleeves": {"enabled": True}}
+        caps = {s["sleeve"]["id"]: s.get("verify", {}).get("vol_cap")
+                for s in build_sleeves(cfg)}
+        self.assertEqual(caps["C"], 5.0)
+        self.assertIsNone(caps["A"])
+        self.assertIsNone(caps["B"])
+
 
 class TestSleeveIsolation(unittest.TestCase):
     def test_kill_switch_is_per_sleeve(self):

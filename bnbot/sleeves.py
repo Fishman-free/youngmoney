@@ -11,6 +11,7 @@ Isolation guarantees (what makes this safe):
   * separate order logs                logs/sleeves/<id>/orders-*.log
   * separate KILL_SWITCH file          state/sleeves/<id>/KILL_SWITCH
   * separate risk limits               per-sleeve override of cfg["risk"]
+  * separate verifier rules            per-sleeve override of cfg["verify"]
 One sleeve hitting halt or being killed cannot touch another's money, and the
 aggregate is only ever a *sum for reporting*, never a shared trading pool.
 """
@@ -37,6 +38,11 @@ DEFAULT_SLEEVES = [
      "symbols": ["DOGEUSDT", "XRPUSDT", "AVAXUSDT", "LINKUSDT"],
      "strategy": {"donchian_window": 12, "mom_lookback_days": 3, "xs_weight": 0.0,
                   "rebalance_band": 0.05, "max_vol_scale": 4.0},
+     # C enters on fast momentum ahead of trend confirmation: narrow D2 to "mom"
+     # or every opening is vetoed (see bnbot/verify.py docstring). Its alt universe
+     # also runs hotter than the global D3 cap -- QNTUSDT measures ~3.77 annualized
+     # -- so C raises vol_cap to 5.0 (still catches genuinely broken data).
+     "verify": {"d2_mode": "mom", "vol_cap": 5.0},
      "risk": {"max_gross_leverage": 10.0, "max_symbol_weight": 1.0,
               "daily_loss_stop": 0.06, "drawdown_throttle": 0.10,
               "drawdown_halt": 0.30}},
@@ -80,6 +86,14 @@ def build_sleeves(cfg, base_dir=None):
         risk.update(s.get("risk", {}))
         risk["kill_switch_file"] = os.path.join(state_dir, "KILL_SWITCH")
         sleeve["risk"] = _clamp_risk(sid, risk)
+        # Per-sleeve verifier overrides. Needed because C enters on fast momentum
+        # before the slow trend confirms, so the default D2 rule ("all") vetoed
+        # 100% of its openings; C narrows it to "mom" explicitly. A/B inherit the
+        # strict default by NOT declaring a `verify` block.
+        if s.get("verify"):
+            merged = dict(sleeve.get("verify", {}))
+            merged.update(s["verify"])
+            sleeve["verify"] = merged
         sleeve["live"] = dict(cfg["live"])
         sleeve["live"]["state_file"] = os.path.join(state_dir, "portfolio.json")
         sleeve["live"]["log_dir"] = os.path.join(root, "logs", "sleeves", sid)

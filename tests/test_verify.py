@@ -64,6 +64,68 @@ class TestVerifier(unittest.TestCase):
         self.assertTrue(ok, reason)
 
 
+class TestD2Modes(unittest.TestCase):
+    """D2 can be narrowed per sleeve.
+
+    Sleeve C enters on fast momentum before the slow Donchian trend confirms, so
+    under the default "all" every opening was vetoed: 24 rejects / 0 fills over
+    10 rounds on 2026-10-05, making its 200-trade gate structurally unreachable.
+    """
+
+    def test_default_is_all(self):
+        v = SignalVerifier(None, {})
+        self.assertEqual(v.p["d2_mode"], "all")
+
+    def test_mode_matrix(self):
+        cases = {
+            "all":   {  # trend AND momentum must agree
+                (1, 1, 1): True, (1, 0, 1): False, (0, 1, 1): False, (0, 0, 1): False,
+                (-1, -1, -1): True, (0, -1, -1): False,
+            },
+            "any":   {(1, 1, 1): True, (1, 0, 1): True, (0, 1, 1): True, (0, 0, 1): False},
+            "mom":   {(0, 1, 1): True, (1, 0, 1): False, (0, -1, -1): True, (0, 1, -1): False},
+            "trend": {(1, 0, 1): True, (0, 1, 1): False, (-1, 0, -1): True},
+        }
+        v = SignalVerifier(None, {})
+        for mode, table in cases.items():
+            v.p["d2_mode"] = mode
+            for (trend, mom, want), expected in table.items():
+                self.assertEqual(v.d2_agrees(trend, mom, want), expected,
+                                 f"mode={mode} trend={trend} mom={mom} want={want}")
+
+    def test_sleeve_c_case_momentum_only(self):
+        """trend=0 mom=+1 (buy) and trend=0 mom=-1 (sell): C's actual rejections."""
+        v = SignalVerifier(None, {}, {"d2_mode": "mom"})
+        self.assertTrue(v.d2_agrees(0, 1, 1))     # BUY QNTUSDT
+        self.assertTrue(v.d2_agrees(0, -1, -1))   # SELL XRPUSDT
+        strict = SignalVerifier(None, {})
+        self.assertFalse(strict.d2_agrees(0, 1, 1))
+        self.assertFalse(strict.d2_agrees(0, -1, -1))
+
+    def test_unknown_mode_falls_back_to_all(self):
+        v = SignalVerifier(None, {}, {"d2_mode": "bogus"})
+        self.assertTrue(v.d2_agrees(1, 1, 1))
+        self.assertFalse(v.d2_agrees(0, 1, 1))
+
+    def test_flat_market_still_rejected_under_mom(self):
+        """Narrowing D2 must not open the door to a dead-flat market."""
+        from bnbot.strategy import CompositeStrategy
+        md = make_market(SYM, closes4h=[100.0] * 200, closes1d=[100.0] * 120)
+        ctx = TestVerifier()._ctx(CompositeStrategy(make_config("unused"), md))
+        v = SignalVerifier(md, {SYM: 100.0}, {"d2_mode": "mom"})
+        ok, reason = v.verify({"symbol": SYM, "side": "BUY", "qty": 1, "reduce_only": False}, ctx)
+        self.assertFalse(ok)
+        self.assertIn("D2", reason)
+
+    def test_reduce_only_still_passes_under_all_modes(self):
+        for mode in ("all", "any", "mom", "trend"):
+            v = SignalVerifier(None, {}, {"d2_mode": mode})
+            ok, reason = v.verify({"symbol": SYM, "side": "SELL", "qty": 1,
+                                   "reduce_only": True}, None)
+            self.assertTrue(ok, mode)
+            self.assertEqual(reason, "reduce-only")
+
+
 class TestReportGates(unittest.TestCase):
     def test_drawdown_and_sharpe_helpers(self):
         self.assertAlmostEqual(max_drawdown([100, 110, 99, 120]), 1.0 - 99 / 110)

@@ -14,6 +14,26 @@ Engine: laya (open-source non-autoregressive System-1 decision engine, the
 same species as TypeSafe Jev). Optional dependency -- if laya is missing or
 errors, the layer degrades to pass-through (fallback ladder) and says so.
 
+Load discipline (2026-10-06): "the auxiliary layer must never paralyse the main
+loop" is easy to satisfy for a missing or throwing import, but a *hang* is not
+an exception and cannot be caught. Measured failure, twice:
+
+  1. `laya.Router()` construction returns instantly -- the model load is LAZY
+     and happens inside the first `predict()` (laya/router.py `load()` ->
+     `Agent.__init__` -> `snapshot_download`). Bounding the constructor guards
+     nothing.
+  2. huggingface_hub >= 1.x pulls checkpoints through the Xet backend (hf_xet,
+     a Rust client) that ignores HTTPS_PROXY. On this proxy-only network the
+     fetch stalled at 0 bytes for 12+ minutes with the process idle on I/O
+     (thread dump: httpx -> httpcore -> ssl.read), while the same file came down
+     fine over plain HTTPS through the proxy (HTTP 206, 3.7s).
+
+So every battery call now runs in a daemon thread with a hard bound --
+`load_timeout_s` for the first (model-loading) call, `battery_timeout_s`
+afterwards. Exceeding it marks the engine dead for the rest of the round and the
+layer degrades to pass-through. HF_HUB_DISABLE_XET=1 is set below, before any
+import, to keep the classic HTTP path.
+
 Every call logs (snapshot, questions, answers) plus later outcome to
 state/judgment-log.jsonl as calibration triples (Brier/ECE once enough
 outcomes accumulate). Timestamp discipline: the snapshot is built ONLY from
@@ -22,8 +42,14 @@ information strictly before the decision time.
 
 import json
 import os
+import threading
 import time
 from datetime import datetime, timezone
+
+# Must be set before huggingface_hub is imported anywhere (laya imports it).
+# Without this the checkpoint download hangs instead of failing, which stalls
+# the entire paper round. See the "Load discipline" note above.
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 # policy thresholds live in code (edit a coefficient, not a prompt)
 POLICY = {
@@ -31,7 +57,8 @@ POLICY = {
     "min_setup": 1.5,           # score 0-3 rubric
     "max_toxicity": 0.70,       # noul: P(overreaction) too high -> veto
     "max_risk_elevated": 0.75,  # risk analyst: P(downside elevated) too high -> veto
-    "battery_timeout_s": 10.0,  # deadline rule: on timeout, hold (veto)
+    "battery_timeout_s": 10.0,  # warm-call bound; on exceed -> hold (veto)
+    "load_timeout_s": 300.0,    # first call also pays the lazy model load
     "on_missing": "pass",       # auxiliary layer: degrade to pass-through
 }
 
@@ -124,30 +151,64 @@ class JudgmentLayer:
         self.log_path = log_path
         self._router = None
         self._engine = "none"
+        self._warm = False     # a predict has returned -> the model is loaded
+        self._dead = False     # engine hung once -> stop paying the bound per order
 
     def _get_router(self):
+        """Construct the router.
+
+        Cheap: laya loads the model LAZILY inside the first predict(), so this
+        only exercises the import. Bounding it would guard nothing.
+        """
         if self._router is None:
-            from laya import Router  # optional dependency (fallback if missing)
+            from laya import Router   # optional dependency
             self._router = Router()
             self._engine = "laya"
         return self._router
 
     def ask(self, snapshot):
-        """Run the atomic battery on one snapshot. Returns answers dict or None
-        on any failure (fallback ladder: degrade to pass-through)."""
-        try:
-            router = self._get_router()
-            t0 = time.time()  # deadline applies to the decision, not model load
-            result = router.predict(snapshot, BATTERY)
-            if time.time() - t0 > self.p["battery_timeout_s"]:
-                self._log(snapshot, None, "timeout")
-                return None
-            answers = result.get("answers", {})
-            self._log(snapshot, answers, "ok")
-            return answers
-        except Exception as e:
-            self._log(snapshot, None, f"error:{type(e).__name__}")
+        """Run the atomic battery on one snapshot, hard-bounded.
+
+        Returns the answers dict, or None to degrade to pass-through. The work
+        runs in a daemon thread because a HANG (stuck checkpoint download) is not
+        an exception and cannot be caught -- unbounded it blocks the paper round
+        and the 4h loop behind it forever. The first call also pays the lazy
+        model load, so it gets `load_timeout_s`; warm calls get
+        `battery_timeout_s`.
+        """
+        if self._dead:
             return None
+        bound = self.p["battery_timeout_s"] if self._warm else self.p["load_timeout_s"]
+        box = {}
+
+        def _work():
+            try:
+                router = self._get_router()
+                t0 = time.time()  # deadline applies to the decision, not model load
+                box["result"] = router.predict(snapshot, BATTERY)
+                box["elapsed"] = time.time() - t0
+            except BaseException as e:    # noqa: BLE001 - never kill the main loop
+                box["error"] = type(e).__name__
+
+        t = threading.Thread(target=_work, daemon=True, name="laya-ask")
+        t.start()
+        t.join(float(bound))
+        if t.is_alive():
+            # Hung, not failing: give up on the engine for the rest of this round
+            # instead of paying the bound again for every remaining order.
+            self._dead = True
+            self._log(snapshot, None, "timeout")
+            return None
+        if "error" in box:
+            self._log(snapshot, None, f"error:{box['error']}")
+            return None
+        self._warm = True
+        if box.get("elapsed", 0.0) > self.p["battery_timeout_s"]:
+            self._log(snapshot, None, "timeout")
+            return None
+        answers = (box.get("result") or {}).get("answers", {})
+        self._log(snapshot, answers, "ok")
+        return answers
 
     def gate(self, answers, side=None):
         """Policy gate in code: (allow_new_exposure, reason).
